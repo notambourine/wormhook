@@ -105,9 +105,20 @@ case "$EVENT" in
 esac
 
 # ── Alert helper ──────────────────────────────────────────────────────────────
-# PreToolUse: block (exit 2). SessionStart/PostToolUse: accumulate; emitted as
-# additionalContext at the end (TUI stderr is invisible — confirmed 2026-05-12).
-ALERTS=""
+# Two delivery channels, by event (see KEY-DECISION below):
+#   PreToolUse:               exit 2 — the ONLY real hard block Claude Code offers.
+#   SessionStart/PostToolUse: accumulate, then emit `systemMessage` (loud, shown to
+#                             the USER) + `additionalContext` (instructs the model).
+# KEY-DECISION 2026-06-01: SessionStart CANNOT abort the session — Claude Code has no
+# continue:false / decision:block for it (confirmed via hooks docs), and exit 2 there
+# just dumps stderr and proceeds. So "refuse to boot" is impossible; the strongest we
+# get is (1) a clean `systemMessage` warning to the human at startup, and (2) the
+# exit-2 block on the actual npm/node command. Earlier we relied on additionalContext
+# alone — that only talks to the model and reads as a soft flag; bare stderr+exit 0 is
+# invisible in the TUI (the "silent for a month" bug). systemMessage is the documented
+# user-facing channel. A broad all-Bash exit-2 quarantine was rejected: the remediation
+# steps below are themselves Bash, so it would lock the user out of fixing the machine.
+ALERTS="" SUMMARY=""
 alert() {
   local block
   block=$(cat <<EOF
@@ -122,6 +133,7 @@ EOF
 )
   echo "$block" >&2
   ALERTS="${ALERTS}${block}"$'\n'
+  SUMMARY="${SUMMARY}• ${1}"$'\n'
   [[ "$MODE" == "pre_tool" ]] && exit 2
 }
 _in_list() { local n="$1"; shift; local x; for x in "$@"; do [[ "$x" == "$n" ]] && return 0; done; return 1; }
@@ -186,30 +198,69 @@ BODY
 )"
 done
 
-# Agent-hook injection CHAIN: the dropper wires itself into settings.json so it
-# re-runs on launch. Detecting the wired entry (not just the file) catches the case
-# where the dropper ran once, injected the hook, then deleted its on-disk file.
-# Tokens below don't appear in any legit hook command here, so a hit is high-signal.
-for sj in "${CWD}/.claude/settings.json" "${HOME}/.claude/settings.json"; do
-  [[ -f "$sj" ]] || continue
-  hook_hit=$(jq -r '[.hooks // {} | .. | strings] | .[]' "$sj" 2>/dev/null \
-    | grep -iE 'setup\.mjs|router_runtime|router_init|tanstack_runner|opensearch_init|bun_environment|atob\(\s*process\.env' | head -1)
-  [[ -z "$hook_hit" ]] && continue
-  alert "INJECTED AGENT HOOK DETECTED" "$(cat <<BODY
-A hook entry in $sj references a known agent-hijack dropper:
-  $hook_hit
-This is how Mini Shai-Hulud re-runs its payload on every Claude Code launch, even
-after deleting the dropper file.
+# Agent-config injection CHAIN: the dropper wires itself into an AI-agent/editor
+# config so it re-runs on launch — as a SessionStart hook (Mini Shai-Hulud) OR a
+# rogue MCP server entry (SANDWORM_MODE). Detecting the WIRED entry (not just the
+# file) catches the case where the dropper ran once, injected the config, then
+# deleted its on-disk file. Schemas differ across tools, so scan EVERY string value;
+# the dropper-token set is specific enough that any hit is high-signal.
+for cfg in \
+  "${CWD}/.claude/settings.json"  "${HOME}/.claude/settings.json" \
+  "${CWD}/.cursor/mcp.json"       "${HOME}/.cursor/mcp.json" \
+  "${CWD}/.vscode/mcp.json"       "${HOME}/.continue/config.json" \
+  "${HOME}/.windsurf/mcp.json"; do
+  [[ -f "$cfg" ]] || continue
+  cfg_hit=$(jq -r '[.. | strings] | .[]' "$cfg" 2>/dev/null \
+    | grep -iE "$MALWARE_DROPPER_TOKENS_RE" | head -1)
+  [[ -z "$cfg_hit" ]] && continue
+  alert "INJECTED AGENT CONFIG DETECTED" "$(cat <<BODY
+A value in $cfg references a known agent-hijack dropper:
+  $cfg_hit
+This is how Mini Shai-Hulud / SANDWORM_MODE re-runs its payload on every Claude Code,
+Cursor, VS Code, Continue, or Windsurf launch — as a SessionStart hook or a rogue
+MCP server — even after deleting the dropper file.
 ${COMMAND:+Command blocked: $COMMAND}
 
 Immediate steps:
-  1. Open $sj and remove the hooks entry referencing the string above (you did not add it)
-  2. If this is ~/.claude/settings.json and you sync that dir: STOP — do not sync
-     (would propagate). Clean the synced source first, then re-sync.
-  3. Rotate: npm tokens, GitHub PATs/OIDC trusts, SSH keys, cloud creds
+  1. Open $cfg and remove the hooks/mcpServers entry referencing the string above
+     (you did not add it)
+  2. If this is under \$HOME and you sync that dir: STOP — do not sync (would
+     propagate). Clean the synced source first, then re-sync.
+  3. Rotate: npm tokens, GitHub PATs/OIDC trusts, SSH keys, cloud + LLM API keys
   4. git log --all --since="2026-04-01" for unexpected commits / impersonation
 BODY
 )"
+done
+
+# Git-hook / template-dir injection (SANDWORM_MODE): a poisoned pre-commit/pre-push
+# hook — installed directly, or globally via init.templateDir, or per-repo via
+# core.hooksPath — re-runs the dropper on every commit/push and silently adds the
+# carrier dependency. This is a top "inject into a repo we pseudo-trust" vector.
+git_hook_dirs=("${CWD}/.git/hooks")
+tmpl_dir=$(git config --global --get init.templateDir 2>/dev/null) && [[ -n "$tmpl_dir" ]] && git_hook_dirs+=("${tmpl_dir/#\~/$HOME}/hooks")
+hooks_path=$(git -C "$CWD" config --get core.hooksPath 2>/dev/null) && [[ -n "$hooks_path" ]] && git_hook_dirs+=("$hooks_path")
+for hd in "${git_hook_dirs[@]}"; do
+  for h in pre-commit pre-push post-checkout post-merge; do
+    [[ -f "$hd/$h" ]] || continue
+    gh_hit=$(grep -iE "$MALWARE_DROPPER_TOKENS_RE"'|curl[^|]*\|[^|]*(sh|node|bash)' "$hd/$h" 2>/dev/null | head -1)
+    [[ -z "$gh_hit" ]] && continue
+    alert "MALICIOUS GIT HOOK DETECTED" "$(cat <<BODY
+A git hook runs a known dropper / pipes a remote script to a shell:
+  $hd/$h
+  $gh_hit
+${COMMAND:+Command blocked: $COMMAND}
+SANDWORM_MODE installs pre-commit/pre-push hooks (directly, or globally via
+init.templateDir, or per-repo via core.hooksPath) to add a carrier dependency and
+exfiltrate tokens on every commit/push.
+
+Immediate steps:
+  1. Inspect and remove the offending hook: $hd/$h
+  2. Audit global template: git config --global --get init.templateDir
+     and per-repo: git config --get core.hooksPath  (unset if you did not add it)
+  3. Rotate: GitHub PATs/OIDC trusts, npm tokens, SSH keys
+BODY
+)"
+  done
 done
 
 # gh-token-monitor persistence (LaunchAgent / systemd user unit).
@@ -240,7 +291,7 @@ if [[ "$RUN_T1" == 1 ]]; then
     bad_scripts=$(jq -r '.scripts // {} | to_entries[]
       | select(.key | test("^(pre|post)?install$|^prepare$"))
       | .value' "$PKG_JSON" 2>/dev/null \
-      | grep -iE 'setup_bun|set_bun|bun_environment|bun\.sh/install|router_(init|runtime)|tanstack_runner|opensearch_init|gh-token-monitor|\.dev-env|node .*\.cjs.*curl|atob\(process\.env|curl[^|]*\|[^|]*(sh|node|bash)' || true)
+      | grep -iE "$MALWARE_DROPPER_TOKENS_RE"'|bun\.sh/install|node .*\.cjs.*curl|curl[^|]*\|[^|]*(sh|node|bash)' || true)
     if [[ -n "$bad_scripts" ]]; then
       alert "MALICIOUS LIFECYCLE SCRIPT IN package.json" "$(cat <<BODY
 package.json has an install-lifecycle script matching a known Shai-Hulud dropper:
@@ -252,6 +303,51 @@ install later fails). Do NOT install.
   1. git log -p -- package.json  (find who injected it)
   2. Reinstall third-party deps with --ignore-scripts until cleared
   3. Rotate npm tokens + GitHub PATs if this was already installed once
+BODY
+)"
+    fi
+  fi
+
+  # Release-config poisoning (SANDWORM_MODE): an injected semantic-release / release-it
+  # exec step that require()s a hidden carrier dep at publish time. `@semantic-release/
+  # exec` alone is legit, so MALWARE_RELEASERC_RE matches only the carrier tell.
+  for rc in "${CWD}/.releaserc" "${CWD}/.releaserc.json" "${CWD}/.releaserc.yaml" \
+            "${CWD}/.releaserc.yml" "${CWD}/.release-it.json" "${CWD}/release.config.js"; do
+    [[ -f "$rc" ]] || continue
+    rc_hit=$(grep -iE "$MALWARE_RELEASERC_RE" "$rc" 2>/dev/null | head -1)
+    [[ -z "$rc_hit" ]] && continue
+    alert "MALICIOUS RELEASE CONFIG" "$(cat <<BODY
+$rc contains an injected publish-time exec step:
+  $rc_hit
+${COMMAND:+Command blocked: $COMMAND}
+SANDWORM_MODE poisons .releaserc/.release-it.json with @semantic-release/exec to
+require() a hidden carrier dependency when the package is published.
+
+Immediate steps:
+  1. git log -p -- "$rc"  (find who added the exec step)
+  2. Remove the exec/require carrier line
+  3. Rotate npm publish tokens
+BODY
+)"
+  done
+
+  # Workflow poisoning (SANDWORM_MODE ci-quality campaign): known-bad action/persona
+  # slugs in .github/workflows. pull_request_target alone is legit and NOT flagged —
+  # only the campaign fingerprints (see MALWARE_WORKFLOW_RE) trip this.
+  if [[ -d "${CWD}/.github/workflows" ]]; then
+    wf_hit=$(grep -rilE "$MALWARE_WORKFLOW_RE" "${CWD}/.github/workflows" 2>/dev/null | head -1)
+    if [[ -n "$wf_hit" ]]; then
+      alert "MALICIOUS GITHUB ACTIONS WORKFLOW" "$(cat <<BODY
+$wf_hit references a known supply-chain campaign action / marker.
+${COMMAND:+Command blocked: $COMMAND}
+SANDWORM_MODE injects a workflow (often pull_request_target, so it runs with repo
+secrets on untrusted PR code) that calls ci-quality/code-quality-check to exfiltrate
+secrets.
+
+Immediate steps:
+  1. git log -p -- "$wf_hit"
+  2. Remove the workflow and any pull_request_target job that builds untrusted PR code
+  3. Rotate ALL repository + org secrets (Actions secrets, OIDC trusts, deploy keys)
 BODY
 )"
     fi
@@ -389,14 +485,17 @@ if [[ "$UPDATE_CACHE" == 1 && -z "$ALERTS" && -d "$NODE_MODULES" ]]; then
   mkdir -p "$CACHE_DIR" && _scan_key > "$MARKER"
 fi
 
-# SessionStart/PostToolUse: emit accumulated findings as additionalContext so Claude
-# sees them (TUI stderr is invisible — see alert() comment).
+# SessionStart/PostToolUse: deliver on BOTH channels — `systemMessage` is shown to
+# the user directly (the loud part), `additionalContext` instructs the model to refuse
+# follow-up installs. SessionStart can't abort, so this is the strongest startup signal.
 if [[ "$MODE" != "pre_tool" && -n "$ALERTS" ]]; then
   evname="SessionStart"; [[ "$MODE" == "post_tool" ]] && evname="PostToolUse"
-  jq -n --arg ctx "$ALERTS" --arg ev "$evname" '{
+  count=$(printf '%s' "$SUMMARY" | grep -c '•')
+  jq -n --arg ctx "$ALERTS" --arg sum "$SUMMARY" --arg ev "$evname" --arg n "$count" '{
+    systemMessage: ("🚨 wormhook: " + $n + " critical supply-chain IOC(s) detected in this repo.\nDo NOT run npm/node installs until resolved:\n" + $sum + "\nSee the assistant message for full remediation steps."),
     hookSpecificOutput: {
       hookEventName: $ev,
-      additionalContext: ("[wormhook] CRITICAL supply-chain IOC findings in this repo. Surface to user immediately and refuse follow-up npm/node commands until resolved:\n" + $ctx)
+      additionalContext: ("[wormhook] CRITICAL supply-chain IOC findings in this repo. State these to the user plainly, then REFUSE to run any npm/node/install command (and decline to \"work around\" the block) until the user confirms the machine is clean:\n" + $ctx)
     }
   }'
 fi

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://www.schemastore.org/claude-code-marketplace.json",
+  "name": "notambourine",
+  "description": "Supply-chain security tooling for Claude Code, by NoTambourine.",
+  "owner": {
+    "name": "NoTambourine LLC",
+    "url": "https://notambourine.com"
+  },
+  "plugins": [
+    {
+      "name": "npm-malware-scan",
+      "source": "./",
+      "description": "npm/node supply-chain malware scanner for Claude Code. Tiered hook detecting Shai-Hulud (1.0-3.0 + Mini), Axios/DPRK RAT, SANDWORM_MODE, and remote-eval loaders via filename, SHA256, and behavioral IOCs."
+    }
+  ]
+}

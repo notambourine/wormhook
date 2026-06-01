@@ -8,7 +8,7 @@
   },
   "plugins": [
     {
-      "name": "npm-malware-scan",
+      "name": "wormhook",
       "source": "./",
       "description": "npm/node supply-chain malware scanner for Claude Code. Tiered hook detecting Shai-Hulud (1.0-3.0 + Mini), Axios/DPRK RAT, SANDWORM_MODE, and remote-eval loaders via filename, SHA256, and behavioral IOCs."
     }

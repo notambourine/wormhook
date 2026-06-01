@@ -1,11 +1,11 @@
 {
   "$schema": "https://www.schemastore.org/claude-code-plugin-manifest.json",
-  "name": "npm-malware-scan",
+  "name": "wormhook",
   "description": "npm/node supply-chain malware scanner for Claude Code. Tiered hook detecting Shai-Hulud (1.0-3.0 + Mini), Axios/DPRK RAT, SANDWORM_MODE, and remote-eval loaders via filename, SHA256, and behavioral IOCs.",
   "author": {
     "name": "NoTambourine LLC",
     "url": "https://notambourine.com"
   },
-  "repository": "https://github.com/notambourine/npm-malware-scan",
+  "repository": "https://github.com/notambourine/wormhook",
   "license": "MIT"
 }

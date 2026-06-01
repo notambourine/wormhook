@@ -42,7 +42,7 @@ MALWARE_PATTERNS="$SCRIPT_DIR/malware-patterns.sh"
 if [[ -z "${MALWARE_INJECT_RE:-}" || -z "${MALWARE_CONTENT_RE:-}" ]]; then
   # Fail loud but open: a missing config file is an install fault, not a malware
   # event — don't brick every npm/node command over it.
-  echo "npm-malware-scan: signatures unavailable ($MALWARE_PATTERNS) — skipping scan" >&2
+  echo "wormhook: signatures unavailable ($MALWARE_PATTERNS) — skipping scan" >&2
   exit 0
 fi
 
@@ -396,7 +396,7 @@ if [[ "$MODE" != "pre_tool" && -n "$ALERTS" ]]; then
   jq -n --arg ctx "$ALERTS" --arg ev "$evname" '{
     hookSpecificOutput: {
       hookEventName: $ev,
-      additionalContext: ("[npm-malware-scan] CRITICAL supply-chain IOC findings in this repo. Surface to user immediately and refuse follow-up npm/node commands until resolved:\n" + $ctx)
+      additionalContext: ("[wormhook] CRITICAL supply-chain IOC findings in this repo. Surface to user immediately and refuse follow-up npm/node commands until resolved:\n" + $ctx)
     }
   }'
 fi

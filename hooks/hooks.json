@@ -6,9 +6,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/npm-malware-scan.sh\"",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/wormhook.sh\"",
             "if": "Bash(npm *)|Bash(npx *)|Bash(pnpm *)|Bash(yarn *)|Bash(bun *)|Bash(node *)",
-            "statusMessage": "Scanning for supply-chain malware..."
+            "statusMessage": "wormhook: scanning for supply-chain malware..."
           }
         ]
       }
@@ -19,9 +19,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/npm-malware-scan.sh\"",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/wormhook.sh\"",
             "if": "Bash(npm *)|Bash(pnpm *)|Bash(yarn *)|Bash(bun *)",
-            "statusMessage": "Post-install supply-chain scan..."
+            "statusMessage": "wormhook: post-install supply-chain scan..."
           }
         ]
       }
@@ -32,8 +32,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/npm-malware-scan.sh\"",
-            "statusMessage": "Scanning node_modules for supply-chain malware..."
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/wormhook.sh\"",
+            "statusMessage": "wormhook: scanning node_modules for supply-chain malware..."
           }
         ]
       }

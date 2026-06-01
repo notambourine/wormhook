@@ -1,16 +1,18 @@
-# npm-malware-scan
+# wormhook
 
-A Claude Code plugin that scans for npm/node **supply-chain malware** before it
-can run. It hooks into Claude Code's tool lifecycle and blocks `npm`/`pnpm`/
-`yarn`/`bun`/`npx`/`node` commands when it finds a known indicator of compromise.
+A Claude Code plugin that catches npm/node **supply-chain malware** at the hook —
+before it can run. It binds to Claude Code's tool lifecycle and blocks `npm`/
+`pnpm`/`yarn`/`bun`/`npx`/`node` commands when it finds a known indicator of
+compromise. Named for the threat it headlines: Shai-Hulud, the self-replicating
+npm *worm* — stopped at the hook.
 
 Built and maintained by [NoTambourine](https://notambourine.com).
 
 ## Install
 
 ```bash
-claude plugin marketplace add notambourine/npm-malware-scan
-claude plugin install npm-malware-scan@notambourine --scope user
+claude plugin marketplace add notambourine/wormhook
+claude plugin install wormhook@notambourine --scope user
 ```
 
 Requires `jq` and `bash` on `PATH`. There is no command to invoke — once
@@ -53,7 +55,7 @@ It binds to three events:
   payload is fetched at runtime (no in-tree payload signature to match).
 
 Detection draws on advisories from CISA, Microsoft, Datadog, Wiz, Semgrep, and
-Socket — see the header of [`scripts/npm-malware-scan.sh`](./scripts/npm-malware-scan.sh)
+Socket — see the header of [`scripts/wormhook.sh`](./scripts/wormhook.sh)
 for the full source list.
 
 ## Signatures

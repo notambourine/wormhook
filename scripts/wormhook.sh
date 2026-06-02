@@ -1,6 +1,7 @@
 #!/bin/bash
 # Tiered supply-chain malware scan. Runs on SessionStart, PreToolUse, PostToolUse.
-# Exit 2 = block with error to Claude (PreToolUse only — Post/Session can't unblock).
+# PreToolUse blocks via permissionDecision:"deny" + a user-facing systemMessage
+# (PreToolUse only — Post/Session can't unblock); see the Alert helper KEY-DECISION.
 #
 # Sources:
 #   - Shai-Hulud 1.0 (Sep 2025): global['!']=X-YYYY fingerprint, crypto drainer
@@ -106,18 +107,27 @@ esac
 
 # ── Alert helper ──────────────────────────────────────────────────────────────
 # Two delivery channels, by event (see KEY-DECISION below):
-#   PreToolUse:               exit 2 — the ONLY real hard block Claude Code offers.
+#   PreToolUse:               permissionDecision:"deny" (hard block) + `systemMessage`
+#                             (loud, shown to the USER at block time) + `permissionDecisionReason`
+#                             (instructs the model) — all three in one exit-0 JSON emission.
 #   SessionStart/PostToolUse: accumulate, then emit `systemMessage` (loud, shown to
 #                             the USER) + `additionalContext` (instructs the model).
 # KEY-DECISION 2026-06-01: SessionStart CANNOT abort the session — Claude Code has no
 # continue:false / decision:block for it (confirmed via hooks docs), and exit 2 there
 # just dumps stderr and proceeds. So "refuse to boot" is impossible; the strongest we
 # get is (1) a clean `systemMessage` warning to the human at startup, and (2) the
-# exit-2 block on the actual npm/node command. Earlier we relied on additionalContext
-# alone — that only talks to the model and reads as a soft flag; bare stderr+exit 0 is
-# invisible in the TUI (the "silent for a month" bug). systemMessage is the documented
-# user-facing channel. A broad all-Bash exit-2 quarantine was rejected: the remediation
-# steps below are themselves Bash, so it would lock the user out of fixing the machine.
+# hard block on the actual npm/node command.
+# KEY-DECISION 2026-06-01 (rev): PreToolUse blocks via permissionDecision:"deny", NOT
+# exit 2. Both are documented hard blocks (verified against the hooks docs — exit-2 is
+# not "the only" block), but exit-2 routes its alert to STDERR, which Claude Code shows
+# to the MODEL only — so the user never saw the 🚨 at block time unless the model chose
+# to relay it. The deny+systemMessage form blocks the command AND surfaces the alert to
+# the human directly AND feeds the model a refuse-to-work-around reason — all three,
+# which exit-2 cannot. Earlier we relied on additionalContext/stderr alone — that only
+# talks to the model and reads as a soft flag; bare stderr+exit 0 is invisible in the TUI
+# (the "silent for a month" bug). A broad all-Bash exit-2 quarantine was rejected: the
+# remediation steps below are themselves Bash, so it would lock the user out of fixing
+# the machine.
 ALERTS="" SUMMARY=""
 alert() {
   local block
@@ -131,10 +141,23 @@ $2
 
 EOF
 )
-  echo "$block" >&2
   ALERTS="${ALERTS}${block}"$'\n'
   SUMMARY="${SUMMARY}• ${1}"$'\n'
-  [[ "$MODE" == "pre_tool" ]] && exit 2
+  if [[ "$MODE" == "pre_tool" ]]; then
+    # Hard block on the actual npm/node command. permissionDecision:"deny" blocks it;
+    # systemMessage shows the 🚨 to the USER directly at block time (exit-2's stderr
+    # would reach the model only); permissionDecisionReason tells the model to state the
+    # block plainly and not work around it. One exit-0 emission, all three channels.
+    jq -n --arg title "$1" --arg body "$2" '{
+      systemMessage: ("🚨 wormhook BLOCKED this command — supply-chain IOC detected:\n" + $title + "\n\n" + $body),
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: ("[wormhook] Blocked install/run: " + $title + ". State this block to the user plainly and do NOT attempt to work around it or re-run the command until the user confirms the machine is clean.\n" + $body)
+      }
+    }'
+    exit 0
+  fi
 }
 _in_list() { local n="$1"; shift; local x; for x in "$@"; do [[ "$x" == "$n" ]] && return 0; done; return 1; }
 
@@ -480,7 +503,7 @@ BODY
 fi
 
 # Refresh the scan cache only after a CLEAN expensive scan (no alerts reached here;
-# in pre_tool mode a finding would have exited 2 already).
+# in pre_tool mode a finding would have emitted a deny and exited already).
 if [[ "$UPDATE_CACHE" == 1 && -z "$ALERTS" && -d "$NODE_MODULES" ]]; then
   mkdir -p "$CACHE_DIR" && _scan_key > "$MARKER"
 fi

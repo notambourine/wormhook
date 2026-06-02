@@ -65,7 +65,7 @@ flowchart TD
     REFRESH[refresh scan-cache marker]:::ok --> DONE
 
     G{which<br/>event?}:::guard
-    G -- PreToolUse --> BLOCK([BLOCK · exit 2<br/>command never runs]):::block
+    G -- PreToolUse --> BLOCK([BLOCK · deny + systemMessage<br/>command never runs · user sees alert]):::block
     G -- "SessionStart / PostToolUse" --> SURFACE([systemMessage → user<br/>+ additionalContext → model<br/>SessionStart cannot abort]):::warn
 
     ALLOW([allow]):::ok
@@ -109,20 +109,24 @@ It binds to three events:
 
 | Event | When | What |
 |-------|------|------|
-| `PreToolUse` | before an `npm`/`node`/… command | Tier 0–1 (+ Tier 2 if deps drifted); **blocks** (exit 2) on a hit |
+| `PreToolUse` | before an `npm`/`node`/… command | Tier 0–1 (+ Tier 2 if deps drifted); **blocks** (`permissionDecision: "deny"` + user-facing `systemMessage`) on a hit |
 | `PostToolUse` | right after an install-class command | full re-scan of the freshly written tree; reports via `systemMessage` |
 | `SessionStart` | on launch | Tier 0–1 (+ Tier 2 on a stale cache); reports via `systemMessage` + context |
 
-**Enforcement reality (where the lock actually holds).** The only true hard block
-Claude Code offers is `PreToolUse` exit 2 — that stops the `npm`/`node` command
-outright, regardless of whether the model cooperates. `SessionStart` and
-`PostToolUse` run *after* the point of no return, and Claude Code has no mechanism
-to abort a session, so they can't "refuse to boot." Instead they deliver findings on
-two channels: a `systemMessage` shown straight to **you**, and `additionalContext`
-that instructs the model to refuse follow-up installs. That's deliberately stronger
-than the old "drop a note in context and hope" approach — but startup-time findings
-are a *warning to act on*, not a wall. The wall is the `PreToolUse` block (and the
-install-layer firewall you run alongside it).
+**Enforcement reality (where the lock actually holds).** The hard block is at
+`PreToolUse`, emitted as `permissionDecision: "deny"` — that stops the `npm`/`node`
+command outright, regardless of whether the model cooperates. It rides three channels
+in one response: `deny` (blocks the command), a `systemMessage` that shows the 🚨 alert
+straight to **you** at block time, and a `permissionDecisionReason` that tells the model
+to state the block plainly and not work around it. (Exit code 2 is an equally valid hard
+block, but it routes its alert to stderr — which Claude Code shows to the *model* only,
+so you'd see the alert solely if the model relayed it. `deny` + `systemMessage` hits all
+three audiences at once.) `SessionStart` and `PostToolUse` run *after* the point of no
+return, and Claude Code has no mechanism to abort a session, so they can't "refuse to
+boot." Instead they deliver findings on two channels: a `systemMessage` shown straight to
+**you**, and `additionalContext` that instructs the model to refuse follow-up installs.
+Startup-time findings are a *warning to act on*, not a wall. The wall is the `PreToolUse`
+block (and the install-layer firewall you run alongside it).
 
 ## What it detects
 

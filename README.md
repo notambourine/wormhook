@@ -97,7 +97,13 @@ it can actually find something new:
   into a repo you only partly trust.
 - **Tier 2 — `node_modules` content/IOC scan** (expensive): runs only when
   dependencies actually changed, keyed off the lockfile hash + `node_modules`
-  mtime (cached under `~/.cache/notambourine/`).
+  mtime (cached under `~/.cache/notambourine/`). The walk is bounded by a 20s
+  `timeout`; on very large trees (~20k+ files — measured: a 22.7k-file pnpm tree
+  lands right at the cap) it may scan only partially rather than hang the session.
+  This is deliberate: Tier 2 **fails open** and is advisory at `SessionStart`, and
+  the `PostToolUse` re-scan covers the freshly written tree after an install — so a
+  truncated startup scan trades completeness for never blocking your launch. The
+  install-time gate that actually *blocks* is Tier 1, which has no such ceiling.
 
 It binds to three events:
 

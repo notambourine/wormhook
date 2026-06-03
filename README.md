@@ -145,7 +145,18 @@ block (and the install-layer firewall you run alongside it).
   carrier injection in `.releaserc`/`.release-it.json`.
 - **Remote-eval loaders** — `atob(process.env.…)` + `eval`/`Function(await …)`
   behavioral fingerprints, where the C2 URL is hidden in an env var and the
-  payload is fetched at runtime (no in-tree payload signature to match).
+  payload is fetched at runtime (no in-tree payload signature to match) — plus the
+  field-observed C2/exfil hosts these campaigns embed in-source (`m-kosche.com`,
+  `auth-confirm-nine.vercel.app`, `api.masscan.cloud`, `*.getsession.org` exfil
+  nodes), mirrored from the network-blocklist companion lock.
+- **Campaign-agnostic behaviors** (the `node_modules` tier only) — generic
+  malicious *behaviors* that catch the next campaign before it has a name:
+  decode-then-`eval` droppers (`eval`/`Function(atob(…` / `Function(Buffer.from(…`),
+  bash reverse shells (`/dev/tcp/`), and bulk environment exfil
+  (`JSON.stringify(process.env)`) or git-credential-store reads. These are a
+  higher-FP class than the IOCs above, so they're scoped to third-party deps —
+  see [what it deliberately doesn't do](#what-it-deliberately-doesnt-do) for the
+  patterns held back (IMDS, interactive-shell spawn) and why.
 
 ### Threat model: the repo you *pseudo-trust*
 
@@ -169,6 +180,47 @@ notices *this* one. The vectors it watches and where each is caught:
 those scans key off the campaign-specific fingerprints (the known-bad action slug,
 the carrier `require()`), not the generic feature — keeping CI false positives at
 zero.
+
+**Can the worm just disable the scanner?** This is wormhook's own threat model
+turned on itself: a campaign whose whole MO is writing into `~/.claude/` (Mini
+Shai-Hulud's AGENT-HIJACK) could, in principle, edit the scanner sitting next to
+the hook it injects. [sloppy-joe](https://github.com/brennhill/sloppy-joe) answers
+this by keeping its config *outside* the project repo so an agent with shell access
+can't weaken its own checks. wormhook gets most of that property for free: the
+signatures ship in the **installed plugin directory**, not the project tree, so a
+project-scoped agent never has them in reach. The residual gap is a worm with write
+access to `$HOME` editing the plugin itself — out of scope for a single hook to
+defend against (the OS/file-permission layer owns it), but worth naming: if you sync
+`~/.claude/` across machines, treat the plugin dir as security-sensitive and review
+diffs to it the same way you would an injected hook.
+
+## What it deliberately doesn't do
+
+wormhook is one lock, and a narrow one on purpose. Several common supply-chain
+checks are *deliberately* out of scope because they need context a synchronous,
+no-network hook doesn't have — pushing them in would trade away the near-zero
+false-positive rate that makes the block trustworthy. Each is owned by a different
+layer you should run alongside:
+
+| Check it doesn't do | Why not (at the hook) | Layer that owns it |
+|---------------------|------------------------|--------------------|
+| Package existence / hallucination, typosquatting, version-age & download gating, maintainer-change | All need live **registry** lookups; the hook runs with no network | [`safedep/vet`](https://github.com/safedep/vet), [Socket](https://socket.dev/), [sloppy-joe](https://github.com/brennhill/sloppy-joe) |
+| Known-CVE vulnerability scanning | Needs an OSV/advisory feed | `vet`, `npm audit`, Dependabot |
+| Secret detection (entropy / format regex) | A scanner's job, not a malware gate | `gitleaks`, `trufflehog` |
+| Generic GitHub Actions hardening (unpinned actions, broad permissions, all `pull_request_target`) | Flagging the generic feature blows up CI false positives — wormhook keys off campaign fingerprints only | `actionlint`, `zizmor`, depsec |
+| Runtime network monitoring (live C2, DNS exfil, reverse-shell sockets) | A static hook can't watch live sockets; it matches the *code*, not the connection | an install-time sandbox / eBPF runtime monitor |
+| AST + reachability analysis to vet `eval`/`exec` | wormhook keeps grep patterns deliberately narrow instead of parsing — no AST means it can't safely scan broadly, so it doesn't try | [depsec](https://depsec.dev/) (tree-sitter) |
+| Flagging any `child_process` exec/spawn (guarddog `npm-silent-process-execution`) | Half the registry shells out legitimately — block-tier FP catastrophe; it's a *triage* signal, not a *block* signal | [GuardDog](https://github.com/DataDog/guarddog) (WARNING-tier, human triage) |
+| Obfuscated dynamic API calls — `Reflect.get`, bracket-access (guarddog `npm-api-obfuscation`) | Legit metaprogramming, polyfills, and bundlers use these; WARNING-tier triage | GuardDog |
+| Credential-file reads → network exfil (`.aws/credentials`, `/etc/passwd`, `.ssh/id_rsa`; guarddog `npm-exfiltrate-sensitive-data`) | Needs **taint tracking** (the credential must *flow into* the request) — co-occurrence alone FPs on `aws-sdk`, k8s, and ssh libs that legitimately read these *and* make HTTPS calls | GuardDog (`mode: taint`) |
+| Raw-IP / crypto-RPC / APT C2 blocklisting (`api.trongrid.io`, bare IPs) | Matching a raw IP or a legit blockchain RPC in dep *source* is high-FP, low-signal — a connection-time control, not a content one | a DNS/pf network blocklist (e.g. `/etc/hosts` + `pf` table) |
+
+The design bet is **independence over coverage**: a fast, no-network, near-zero-FP
+gate at the agent boundary that trips on a specific, evidence-backed set of
+indicators — run *alongside* the layers above, not instead of them. Two of the rows
+above (`serialize-environment`, decode-then-`eval`) *were* portable and have been
+adopted as [campaign-agnostic behaviors](#what-it-detects); the rest stay out on
+purpose, and the line between them is FP-safety, not effort.
 
 ## Signatures
 

@@ -42,8 +42,10 @@ MALWARE_PATTERNS="$SCRIPT_DIR/malware-patterns.sh"
 [[ -r "$MALWARE_PATTERNS" ]] && source "$MALWARE_PATTERNS"
 if [[ -z "${MALWARE_INJECT_RE:-}" || -z "${MALWARE_CONTENT_RE:-}" ]]; then
   # Fail loud but open: a missing config file is an install fault, not a malware
-  # event — don't brick every npm/node command over it.
+  # event — don't brick every npm/node command over it. systemMessage (not bare
+  # stderr) so the degraded state is visible to the USER, not just debug logs.
   echo "wormhook: signatures unavailable ($MALWARE_PATTERNS) — skipping scan" >&2
+  jq -nc --arg msg "🟡 [wormhook] signatures unavailable ($MALWARE_PATTERNS) — scan SKIPPED. Reinstall the plugin." '{systemMessage: $msg}'
   exit 0
 fi
 
@@ -129,6 +131,11 @@ esac
 # remediation steps below are themselves Bash, so it would lock the user out of fixing
 # the machine.
 ALERTS="" SUMMARY=""
+# Degraded-but-not-infected conditions (scan timeouts etc). A run with warnings
+# reports 🟡 instead of 🟢 and never refreshes the clean-scan cache — a truncated
+# scan is not a clean scan.
+WARNINGS=""
+warn() { WARNINGS="${WARNINGS:+$WARNINGS; }$1"; }
 alert() {
   local block
   block=$(cat <<EOF
@@ -379,13 +386,15 @@ BODY
   # Project source scan: an attacker with repo write-access can inject the loader into
   # ANY file (Microsoft's case was server/routes/api/auth.js), so scan the tree broadly.
   # Narrow INJECT_RE keeps FPs down on minified bundles; build/VCS dirs excluded.
-  inject_hit=$(timeout 15 grep -rlE "$MALWARE_INJECT_RE" "$CWD" \
+  inject_out=$(timeout 15 grep -rlE "$MALWARE_INJECT_RE" "$CWD" \
     --include="*.js"  --include="*.mjs" --include="*.cjs" \
     --include="*.ts"  --include="*.mts" --include="*.cts" \
     --include="*.jsx" --include="*.tsx" \
     --exclude-dir=node_modules --exclude-dir=.git \
     --exclude-dir=dist --exclude-dir=build --exclude-dir=.next --exclude-dir=.output \
-    2>/dev/null | head -1)
+    2>/dev/null)
+  [[ $? -eq 124 ]] && warn "project source scan timed out at 15s (coverage incomplete)"
+  inject_hit=$(head -n1 <<<"$inject_out")
   if [[ -n "$inject_hit" ]]; then
     alert "MALICIOUS CODE IN PROJECT SOURCE FILE" "$(cat <<BODY
 Found malware fingerprint in: $inject_hit
@@ -428,6 +437,10 @@ if [[ "$RUN_T2" == 1 && -d "$NODE_MODULES" ]]; then
   for n in "${PAYLOAD_FILES[@]}" "${HASH_IOC_FILES[@]}"; do
     if [[ $first == 1 ]]; then find_expr+=( -name "$n" ); first=0; else find_expr+=( -o -name "$n" ); fi
   done
+  # Capture find's output (not a process substitution) so a timeout (exit 124) is
+  # observable — a truncated walk must report ⚠️, not pass as clean.
+  ioc_paths=$(timeout 20 find "$NODE_MODULES" -maxdepth 6 \( "${find_expr[@]}" \) -type f 2>/dev/null)
+  [[ $? -eq 124 ]] && warn "node_modules IOC-filename walk timed out at 20s (coverage incomplete)"
   while IFS= read -r path; do
     [[ -z "$path" ]] && continue
     base="${path##*/}"
@@ -471,11 +484,13 @@ BODY
         break
       done
     fi
-  done < <(timeout 20 find "$NODE_MODULES" -maxdepth 6 \( "${find_expr[@]}" \) -type f 2>/dev/null)
+  done <<<"$ioc_paths"
 
   # Content fingerprints: ONE combined gate pass (was 14 separate walks). On a hit —
   # rare — re-grep the single offending file per-pattern to name the campaign.
-  hitfile=$(timeout 20 grep -rlEm1 --include="*.js" --include="*.mjs" --include="*.cjs" "$MALWARE_CONTENT_RE" "$NODE_MODULES" 2>/dev/null | head -1)
+  hit_out=$(timeout 20 grep -rlEm1 --include="*.js" --include="*.mjs" --include="*.cjs" "$MALWARE_CONTENT_RE" "$NODE_MODULES" 2>/dev/null)
+  [[ $? -eq 124 ]] && warn "node_modules content scan timed out at 20s (coverage incomplete)"
+  hitfile=$(head -n1 <<<"$hit_out")
   if [[ -n "$hitfile" ]]; then
     matched="(unidentified)"
     for pattern in "${MALWARE_CONTENT_FINGERPRINTS[@]}"; do
@@ -502,9 +517,11 @@ BODY
   fi
 fi
 
-# Refresh the scan cache only after a CLEAN expensive scan (no alerts reached here;
-# in pre_tool mode a finding would have emitted a deny and exited already).
-if [[ "$UPDATE_CACHE" == 1 && -z "$ALERTS" && -d "$NODE_MODULES" ]]; then
+# Refresh the scan cache only after a CLEAN, COMPLETE expensive scan (no alerts
+# reached here; in pre_tool mode a finding would have emitted a deny and exited
+# already). A timed-out walk (WARNINGS) is not a clean scan — don't cache it, so
+# the next event retries the full walk.
+if [[ "$UPDATE_CACHE" == 1 && -z "$ALERTS" && -z "$WARNINGS" && -d "$NODE_MODULES" ]]; then
   mkdir -p "$CACHE_DIR" && _scan_key > "$MARKER"
 fi
 
@@ -521,6 +538,31 @@ if [[ "$MODE" != "pre_tool" && -n "$ALERTS" ]]; then
       additionalContext: ("[wormhook] CRITICAL supply-chain IOC findings in this repo. State these to the user plainly, then REFUSE to run any npm/node/install command (and decline to \"work around\" the block) until the user confirms the machine is clean:\n" + $ctx)
     }
   }'
+fi
+
+# ── Always-on status line ─────────────────────────────────────────────────────
+# KEY-DECISION 2026-06-06: a clean pass prints 🟢 and a degraded pass 🟡 via
+# `systemMessage` (the only channel guaranteed to reach the USER) so that silence
+# is never ambiguous — before this, "scanned clean" and "hook never ran" looked
+# identical, the same invisibility class as the "silent for a month" bug. Findings
+# stay 🚨 via the alert paths above. No additionalContext on green/yellow: status
+# is for the human; the model needs no instruction when nothing is wrong.
+# Glyphs are 🟢/🟡 + a `[wormhook]` tag (not ✅/⚠️) to match the traffic-light
+# convention of sibling SessionStart status hooks, so multiple lights read as one
+# uniform dashboard strip.
+if [[ -z "$ALERTS" ]]; then
+  SCOPE="persistence"
+  [[ "$RUN_T1" == 1 ]] && SCOPE+=" + source"
+  if [[ "$RUN_T2" == 1 && -d "$NODE_MODULES" ]]; then
+    SCOPE+=" + node_modules"
+  elif [[ -d "$NODE_MODULES" ]]; then
+    SCOPE+=" + node_modules (cached, deps unchanged)"
+  fi
+  if [[ -n "$WARNINGS" ]]; then
+    jq -nc --arg msg "🟡 [wormhook] passed with caveats ($SCOPE) — $WARNINGS" '{systemMessage: $msg}'
+  else
+    jq -nc --arg msg "🟢 [wormhook] clean ($SCOPE)" '{systemMessage: $msg}'
+  fi
 fi
 
 exit 0

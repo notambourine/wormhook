@@ -37,6 +37,11 @@
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/wormhook.sh\"",
             "timeout": 300,
             "statusMessage": "wormhook: scanning node_modules for supply-chain malware..."
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/doctor.sh\"",
+            "timeout": 10
           }
         ]
       }

@@ -27,7 +27,9 @@ claude plugin install wormhook@notambourine --scope user
 Requires `jq` and `bash` on `PATH`. [`ripgrep`](https://github.com/BurntSushi/ripgrep)
 is optional but strongly recommended — content scans use it when present (43x
 faster than BSD grep on large trees, measured) and fall back to `grep` otherwise.
-There is no command to invoke — once installed, it runs automatically.
+There is no command to invoke — once installed, it runs automatically. A
+silent-by-default doctor hook (`scripts/doctor.sh`) speaks up at `SessionStart`
+only if a dependency is missing: 🟡 with the `brew install` one-liner to fix it.
 
 ## How it works
 

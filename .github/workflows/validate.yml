@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# Least-privilege GITHUB_TOKEN: this workflow only reads the checkout. Without
+# this, the token defaults to write scopes a compromised step could abuse.
+permissions:
+  contents: read
+
 jobs:
   validate:
     runs-on: ubuntu-latest

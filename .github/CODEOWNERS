@@ -1,0 +1,5 @@
+# Single-maintainer repo: every path routes to Tom. Review-by-owner is not
+# enforced in the ruleset (a solo maintainer cannot approve their own PR);
+# this file documents ownership and auto-requests review from @tomfuertes
+# the moment any outside collaborator opens a PR.
+* @tomfuertes

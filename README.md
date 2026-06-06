@@ -53,7 +53,7 @@ flowchart TD
     T1c -- hit --> G
     T1c -- clean --> CACHE
 
-    CACHE{deps changed?<br/>lockfile hash + node_modules mtime<br/><i>PostToolUse + install always run;<br/>cache hit skips</i>}:::cache
+    CACHE{deps changed?<br/>lockfile hash + dir-tree mtime ≤2 deep<br/><i>PostToolUse + install always run;<br/>cache hit skips</i>}:::cache
     CACHE -- "no — cache hit" --> DONE
     CACHE -- "yes / stale" --> T2
 
@@ -96,8 +96,11 @@ it can actually find something new:
   can execute a dropper, and it's the one that catches a malicious **pull request**
   into a repo you only partly trust.
 - **Tier 2 — `node_modules` content/IOC scan** (expensive): runs only when
-  dependencies actually changed, keyed off the lockfile hash + `node_modules`
-  mtime (cached under `~/.cache/notambourine/`). The walk is bounded by a 20s
+  dependencies actually changed, keyed off the lockfile hash + the max mtime of
+  `node_modules` dirs ≤2 levels deep (cached under `~/.cache/notambourine/`) —
+  depth-2 dir mtimes catch a payload hand-planted up to 3 levels in (package
+  roots, `@scope/pkg` roots), which a root-only mtime missed between installs.
+  The walk is bounded by a 20s
   `timeout`; on very large trees (~20k+ files — measured: a 22.7k-file pnpm tree
   lands right at the cap) it may scan only partially rather than hang the session.
   This is deliberate: Tier 2 **fails open** and is advisory at `SessionStart`, and

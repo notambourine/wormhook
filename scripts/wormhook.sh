@@ -45,7 +45,7 @@ if [[ -z "${MALWARE_INJECT_RE:-}" || -z "${MALWARE_CONTENT_RE:-}" ]]; then
   # event — don't brick every npm/node command over it. systemMessage (not bare
   # stderr) so the degraded state is visible to the USER, not just debug logs.
   echo "wormhook: signatures unavailable ($MALWARE_PATTERNS) — skipping scan" >&2
-  jq -n --arg msg "⚠️ wormhook: signatures unavailable ($MALWARE_PATTERNS) — scan SKIPPED. Reinstall the plugin." '{systemMessage: $msg}'
+  jq -nc --arg msg "🟡 [wormhook] signatures unavailable ($MALWARE_PATTERNS) — scan SKIPPED. Reinstall the plugin." '{systemMessage: $msg}'
   exit 0
 fi
 
@@ -132,7 +132,7 @@ esac
 # the machine.
 ALERTS="" SUMMARY=""
 # Degraded-but-not-infected conditions (scan timeouts etc). A run with warnings
-# reports ⚠️ instead of ✅ and never refreshes the clean-scan cache — a truncated
+# reports 🟡 instead of 🟢 and never refreshes the clean-scan cache — a truncated
 # scan is not a clean scan.
 WARNINGS=""
 warn() { WARNINGS="${WARNINGS:+$WARNINGS; }$1"; }
@@ -541,12 +541,15 @@ if [[ "$MODE" != "pre_tool" && -n "$ALERTS" ]]; then
 fi
 
 # ── Always-on status line ─────────────────────────────────────────────────────
-# KEY-DECISION 2026-06-06: a clean pass prints ✅ and a degraded pass ⚠️ via
+# KEY-DECISION 2026-06-06: a clean pass prints 🟢 and a degraded pass 🟡 via
 # `systemMessage` (the only channel guaranteed to reach the USER) so that silence
 # is never ambiguous — before this, "scanned clean" and "hook never ran" looked
 # identical, the same invisibility class as the "silent for a month" bug. Findings
 # stay 🚨 via the alert paths above. No additionalContext on green/yellow: status
 # is for the human; the model needs no instruction when nothing is wrong.
+# Glyphs are 🟢/🟡 + a `[wormhook]` tag (not ✅/⚠️) to match the traffic-light
+# convention of sibling SessionStart status hooks, so multiple lights read as one
+# uniform dashboard strip.
 if [[ -z "$ALERTS" ]]; then
   SCOPE="persistence"
   [[ "$RUN_T1" == 1 ]] && SCOPE+=" + source"
@@ -556,9 +559,9 @@ if [[ -z "$ALERTS" ]]; then
     SCOPE+=" + node_modules (cached, deps unchanged)"
   fi
   if [[ -n "$WARNINGS" ]]; then
-    jq -n --arg msg "⚠️ wormhook: passed with caveats ($SCOPE) — $WARNINGS" '{systemMessage: $msg}'
+    jq -nc --arg msg "🟡 [wormhook] passed with caveats ($SCOPE) — $WARNINGS" '{systemMessage: $msg}'
   else
-    jq -n --arg msg "✅ wormhook: clean ($SCOPE)" '{systemMessage: $msg}'
+    jq -nc --arg msg "🟢 [wormhook] clean ($SCOPE)" '{systemMessage: $msg}'
   fi
 fi
 

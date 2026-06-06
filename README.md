@@ -69,7 +69,7 @@ flowchart TD
     G -- "SessionStart / PostToolUse" --> SURFACE([systemMessage → user<br/>+ additionalContext → model<br/>SessionStart cannot abort]):::warn
 
     ALLOW([allow]):::ok
-    DONE([done · allow · ✅/⚠️ status line]):::ok
+    DONE([done · allow · 🟢/🟡 status line]):::ok
 
     classDef evt fill:#1f6feb,stroke:#0d419d,color:#fff
     classDef tier fill:#161b22,stroke:#30363d,color:#e6edf3
@@ -103,7 +103,7 @@ it can actually find something new:
   This is deliberate: Tier 2 **fails open** and is advisory at `SessionStart`, and
   the `PostToolUse` re-scan covers the freshly written tree after an install — so a
   truncated startup scan trades completeness for never blocking your launch. A
-  truncated scan is reported as ⚠️ (not ✅) and does **not** refresh the clean-scan
+  truncated scan is reported as 🟡 (not 🟢) and does **not** refresh the clean-scan
   cache, so the next gated event retries the full walk. The install-time gate that
   actually *blocks* is Tier 1, which has no such ceiling.
 
@@ -111,9 +111,9 @@ It binds to three events:
 
 | Event | When | What |
 |-------|------|------|
-| `PreToolUse` | before an `npm`/`node`/… command | Tier 0–1 (+ Tier 2 if deps drifted); **blocks** (`permissionDecision: "deny"` + user-facing `systemMessage`) on a hit; ✅/⚠️ status line on a pass |
-| `PostToolUse` | right after an install-class command | full re-scan of the freshly written tree; reports via `systemMessage`; ✅/⚠️ status line on a pass |
-| `SessionStart` | on launch | Tier 0–1 (+ Tier 2 on a stale cache); reports via `systemMessage` + context; ✅/⚠️ status line on a pass |
+| `PreToolUse` | before an `npm`/`node`/… command | Tier 0–1 (+ Tier 2 if deps drifted); **blocks** (`permissionDecision: "deny"` + user-facing `systemMessage`) on a hit; 🟢/🟡 status line on a pass |
+| `PostToolUse` | right after an install-class command | full re-scan of the freshly written tree; reports via `systemMessage`; 🟢/🟡 status line on a pass |
+| `SessionStart` | on launch | Tier 0–1 (+ Tier 2 on a stale cache); reports via `systemMessage` + context; 🟢/🟡 status line on a pass |
 
 **Enforcement reality (where the lock actually holds).** The hard block is at
 `PreToolUse`, emitted as `permissionDecision: "deny"` — that stops the `npm`/`node`
@@ -134,13 +134,17 @@ block (and the install-layer firewall you run alongside it).
 `systemMessage`, so silence is never ambiguous — "scanned clean" and "hook never
 ran" used to look identical (the same invisibility class as the stderr bug above):
 
-- ✅ `wormhook: clean (persistence + source + node_modules)` — all scheduled tiers
+- 🟢 `[wormhook] clean (persistence + source + node_modules)` — all scheduled tiers
   ran and found nothing. The scope names what actually ran: `(cached, deps
   unchanged)` means Tier 2 was skipped on a cache hit, not silently dropped.
-- ⚠️ `wormhook: passed with caveats (…) — …` — no IOCs found, but coverage was
+- 🟡 `[wormhook] passed with caveats (…) — …` — no IOCs found, but coverage was
   degraded: a grep/find walk hit its `timeout` ceiling, or the bundled signature
-  file is missing. A ⚠️ run never refreshes the clean-scan cache.
+  file is missing. A 🟡 run never refreshes the clean-scan cache.
 - 🚨 — findings, delivered on the alert channels described above.
+
+The 🟢/🟡 traffic-light glyphs (with the `[wormhook]` tag) are deliberate: they
+match the common convention for SessionStart status hooks, so wormhook's line
+reads as part of one uniform dashboard strip alongside any other lights you run.
 
 Non-gated commands (anything that isn't `npm`/`node`/`npx`/`pnpm`/`yarn`/`bun`)
 stay silent: no scan ran, so there is no verdict to report.

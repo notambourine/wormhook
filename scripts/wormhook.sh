@@ -64,17 +64,31 @@ GATE_RE='^\s*(npm (ci|install|i|add|run|test|exec)|pnpm (install|i|add|run|exec|
 INSTALL_RE='^\s*(npm (ci|install|i|add)|pnpm (install|i|add)|yarn( (install|add))?|bun (install|add|i))(\s|$)'
 
 # ── Scan-cache (Tier 2 only) ──────────────────────────────────────────────────
-# Marker stores a key = lockfile hash + node_modules mtime. Match => deps unchanged
-# since the last CLEAN scan => skip the expensive walk. Derived state, never synced.
+# Marker stores a key = lockfile hash + node_modules dir-tree mtime (depth ≤2).
+# Match => deps unchanged since the last CLEAN scan => skip the expensive walk.
+# Derived state, never synced.
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/notambourine/malware-scan"
 MARKER="$CACHE_DIR/$(printf '%s' "$CWD" | shasum -a 256 | awk '{print $1}')"
-_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+_tree_mtime() {
+  # Max mtime over node_modules itself + dirs ≤2 levels deep. Creating/removing
+  # a file bumps its PARENT dir's mtime, so depth-2 dir mtimes catch a payload
+  # planted up to 3 levels in (pkg roots, @scope/pkg roots — where the known IOC
+  # payload files live). Root-only mtime missed anything below the top level: a
+  # hand-planted node_modules/<pkg>/payload between installs rode the clean
+  # cache until the lockfile changed. Empty/timeout output => 0 => key mismatch
+  # => Tier 2 re-scans (degradation fails toward scanning, never away from it).
+  local statv=(stat -c %Y)                       # GNU
+  stat -f %m "$NODE_MODULES" &>/dev/null && statv=(stat -f %m)  # BSD/macOS
+  local m
+  m=$(timeout 5 find "$NODE_MODULES" -maxdepth 2 -type d -exec "${statv[@]}" {} + 2>/dev/null | sort -rn | head -n1)
+  printf '%s' "${m:-0}"
+}
 _scan_key() {
   local c sig=none
   for c in package-lock.json pnpm-lock.yaml yarn.lock bun.lock; do
     [[ -f "$CWD/$c" ]] && { sig=$(shasum -a 256 "$CWD/$c" | awk '{print $1}'); break; }
   done
-  printf '%s:%s' "$sig" "$(_mtime "$NODE_MODULES")"
+  printf '%s:%s' "$sig" "$(_tree_mtime)"
 }
 deps_changed() {            # 0 = changed/never-scanned (=> scan); 1 = unchanged (=> skip)
   [[ -d "$NODE_MODULES" ]] || return 1

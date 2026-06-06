@@ -24,8 +24,12 @@ claude plugin marketplace add notambourine/wormhook
 claude plugin install wormhook@notambourine --scope user
 ```
 
-Requires `jq` and `bash` on `PATH`. There is no command to invoke — once
-installed, it runs automatically.
+Requires `jq` and `bash` on `PATH`. [`ripgrep`](https://github.com/BurntSushi/ripgrep)
+is optional but strongly recommended — content scans use it when present (43x
+faster than BSD grep on large trees, measured) and fall back to `grep` otherwise.
+There is no command to invoke — once installed, it runs automatically. A
+silent-by-default doctor hook (`scripts/doctor.sh`) speaks up at `SessionStart`
+only if a dependency is missing: 🟡 with the `brew install` one-liner to fix it.
 
 ## How it works
 
@@ -100,15 +104,22 @@ it can actually find something new:
   `node_modules` dirs ≤2 levels deep (cached under `~/.cache/notambourine/`) —
   depth-2 dir mtimes catch a payload hand-planted up to 3 levels in (package
   roots, `@scope/pkg` roots), which a root-only mtime missed between installs.
-  The walk is bounded by a 20s
-  `timeout`; on very large trees (~20k+ files — measured: a 22.7k-file pnpm tree
-  lands right at the cap) it may scan only partially rather than hang the session.
+  Content scans run on **ripgrep when available**, falling back to `grep`
+  (measured on a 58k-file `node_modules`: BSD grep 30.3s, rg 0.7s — the full
+  three-tier scan completes in ~1.2s). Each signature pattern is compile-gated
+  against rg at runtime; one that only parses as POSIX ERE falls back to grep for
+  that scan rather than mis-parse. The walk is bounded by a 20s `timeout`; on a
+  very large tree under the grep fallback it may scan only partially rather than
+  hang the session.
   This is deliberate: Tier 2 **fails open** and is advisory at `SessionStart`, and
   the `PostToolUse` re-scan covers the freshly written tree after an install — so a
   truncated startup scan trades completeness for never blocking your launch. A
   truncated scan is reported as 🟡 (not 🟢) and does **not** refresh the clean-scan
   cache, so the next gated event retries the full walk. The install-time gate that
-  actually *blocks* is Tier 1, which has no such ceiling.
+  actually *blocks* is Tier 1, which has no such ceiling — its source scan runs to
+  completion, because a truncated walk at the blocking tier is a coverage hole, not
+  a degradation. (The harness still bounds the whole hook via the `timeout` in
+  `hooks.json`, set to 300s so only a genuinely pathological tree hits it.)
 
 It binds to three events:
 

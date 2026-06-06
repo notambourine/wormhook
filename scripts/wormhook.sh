@@ -63,6 +63,25 @@ NODE_MODULES="${CWD}/node_modules"
 GATE_RE='^\s*(npm (ci|install|i|add|run|test|exec)|pnpm (install|i|add|run|exec|dlx)|yarn( (install|add|run))?|bun (install|add|i|run|x)|npx|node)(\s|$)'
 INSTALL_RE='^\s*(npm (ci|install|i|add)|pnpm (install|i|add)|yarn( (install|add))?|bun (install|add|i))(\s|$)'
 
+# ── Fast content greps: ripgrep when available ────────────────────────────────
+# KEY-DECISION 2026-06-06: the two content scans (Tier 1 project source, Tier 2
+# node_modules fingerprints) prefer rg over grep. Measured on a 58k-file
+# node_modules: BSD grep 30.3s single-core (blows the 20s Tier-2 ceiling => a
+# permanent 🟡 on every deps change), rg 0.7s parallel — 43x. Verdict parity
+# verified per-pattern (7/7 IOC strings agree) and per-traversal (hidden files,
+# depth, exclusion globs). rg needs --no-ignore --hidden for grep-equivalent
+# coverage (else malware hides behind a .gitignore it ships itself) and -a so
+# NUL-byte padding can't get a file classified binary and skipped. Each pattern
+# is compile-gated at runtime: a future signature using grep-only syntax falls
+# back to grep for that scan rather than mis-parse — degradation fails toward
+# scanning, never away from it.
+RG_BIN=$(command -v rg || true)
+_rg_ok() {  # 0 => rg exists and compiles this pattern
+  [[ -n "$RG_BIN" ]] || return 1
+  printf '' | "$RG_BIN" -q -e "$1" 2>/dev/null
+  [[ $? -ne 2 ]]
+}
+
 # ── Scan-cache (Tier 2 only) ──────────────────────────────────────────────────
 # Marker stores a key = lockfile hash + node_modules dir-tree mtime (depth ≤2).
 # Match => deps unchanged since the last CLEAN scan => skip the expensive walk.
@@ -400,14 +419,28 @@ BODY
   # Project source scan: an attacker with repo write-access can inject the loader into
   # ANY file (Microsoft's case was server/routes/api/auth.js), so scan the tree broadly.
   # Narrow INJECT_RE keeps FPs down on minified bundles; build/VCS dirs excluded.
-  inject_out=$(timeout 15 grep -rlE "$MALWARE_INJECT_RE" "$CWD" \
-    --include="*.js"  --include="*.mjs" --include="*.cjs" \
-    --include="*.ts"  --include="*.mts" --include="*.cts" \
-    --include="*.jsx" --include="*.tsx" \
-    --exclude-dir=node_modules --exclude-dir=.git \
-    --exclude-dir=dist --exclude-dir=build --exclude-dir=.next --exclude-dir=.output \
-    2>/dev/null)
-  [[ $? -eq 124 ]] && warn "project source scan timed out at 15s (coverage incomplete)"
+  # KEY-DECISION 2026-06-06: NO timeout on this grep. Tier 1 is the tier that BLOCKS,
+  # so a truncated walk here is a coverage hole, not a graceful degradation. A 15s
+  # ceiling once fired on a 149-file tree (4ms scan when healthy) purely from
+  # post-wake system load — a false-alarm 🟡 with no self-healing. The walk is still
+  # bounded by the hook-level `timeout` in hooks.json (the harness kills the whole
+  # hook past that), which is set high enough that only a genuinely pathological
+  # tree hits it.
+  if _rg_ok "$MALWARE_INJECT_RE"; then
+    inject_out=$("$RG_BIN" -la --no-ignore --hidden \
+      -g '*.{js,mjs,cjs,ts,mts,cts,jsx,tsx}' \
+      -g '!node_modules' -g '!.git' \
+      -g '!dist' -g '!build' -g '!.next' -g '!.output' \
+      -e "$MALWARE_INJECT_RE" "$CWD" 2>/dev/null)
+  else
+    inject_out=$(grep -rlE "$MALWARE_INJECT_RE" "$CWD" \
+      --include="*.js"  --include="*.mjs" --include="*.cjs" \
+      --include="*.ts"  --include="*.mts" --include="*.cts" \
+      --include="*.jsx" --include="*.tsx" \
+      --exclude-dir=node_modules --exclude-dir=.git \
+      --exclude-dir=dist --exclude-dir=build --exclude-dir=.next --exclude-dir=.output \
+      2>/dev/null)
+  fi
   inject_hit=$(head -n1 <<<"$inject_out")
   if [[ -n "$inject_hit" ]]; then
     alert "MALICIOUS CODE IN PROJECT SOURCE FILE" "$(cat <<BODY
@@ -502,7 +535,12 @@ BODY
 
   # Content fingerprints: ONE combined gate pass (was 14 separate walks). On a hit —
   # rare — re-grep the single offending file per-pattern to name the campaign.
-  hit_out=$(timeout 20 grep -rlEm1 --include="*.js" --include="*.mjs" --include="*.cjs" "$MALWARE_CONTENT_RE" "$NODE_MODULES" 2>/dev/null)
+  if _rg_ok "$MALWARE_CONTENT_RE"; then
+    hit_out=$(timeout 20 "$RG_BIN" -la --max-count=1 --no-ignore --hidden \
+      -g '*.{js,mjs,cjs}' -e "$MALWARE_CONTENT_RE" "$NODE_MODULES" 2>/dev/null)
+  else
+    hit_out=$(timeout 20 grep -rlEm1 --include="*.js" --include="*.mjs" --include="*.cjs" "$MALWARE_CONTENT_RE" "$NODE_MODULES" 2>/dev/null)
+  fi
   [[ $? -eq 124 ]] && warn "node_modules content scan timed out at 20s (coverage incomplete)"
   hitfile=$(head -n1 <<<"$hit_out")
   if [[ -n "$hitfile" ]]; then

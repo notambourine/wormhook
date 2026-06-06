@@ -8,6 +8,7 @@
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/wormhook.sh\"",
             "if": "Bash(npm *)|Bash(npx *)|Bash(pnpm *)|Bash(yarn *)|Bash(bun *)|Bash(node *)",
+            "timeout": 300,
             "statusMessage": "wormhook: scanning for supply-chain malware..."
           }
         ]
@@ -21,6 +22,7 @@
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/wormhook.sh\"",
             "if": "Bash(npm *)|Bash(pnpm *)|Bash(yarn *)|Bash(bun *)",
+            "timeout": 300,
             "statusMessage": "wormhook: post-install supply-chain scan..."
           }
         ]
@@ -33,6 +35,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/wormhook.sh\"",
+            "timeout": 300,
             "statusMessage": "wormhook: scanning node_modules for supply-chain malware..."
           }
         ]

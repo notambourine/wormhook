@@ -48,3 +48,30 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y shellcheck
           shellcheck scripts/wormhook.sh scripts/malware-patterns.sh
+
+      # Versioning is manual; this tripwire turns "forgot to bump" into a red X
+      # instead of silent drift. Behavior lives in scripts/ + hooks/ -- docs- and
+      # CI-only PRs need no bump. Diffs against the PR's recorded base SHA (exact
+      # "what this PR changes", immune to base-branch drift); the sort -V check
+      # additionally requires the version to move FORWARD, not merely differ.
+      - name: Require version bump when behavior changes (PRs only)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          if git diff --quiet "$BASE_SHA" HEAD -- scripts/ hooks/; then
+            echo "no behavior change (scripts/, hooks/) -- version bump not required"
+            exit 0
+          fi
+          old=$(git show "$BASE_SHA:.claude-plugin/plugin.json" | jq -r '.version // "0.0.0"')
+          new=$(jq -r '.version // "0.0.0"' .claude-plugin/plugin.json)
+          if [ "$old" = "$new" ]; then
+            echo "::error file=.claude-plugin/plugin.json::scripts/ or hooks/ changed but version is still $old -- bump it (fix: patch, feat: minor, breaking: major)"
+            exit 1
+          fi
+          if [ "$(printf '%s\n%s\n' "$old" "$new" | sort -V | tail -n1)" != "$new" ]; then
+            echo "::error file=.claude-plugin/plugin.json::version went backwards: $old -> $new"
+            exit 1
+          fi
+          echo "version bump OK: $old -> $new"

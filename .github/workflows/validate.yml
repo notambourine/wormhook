@@ -14,14 +14,31 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
+      # Egress monitoring of the runner itself (StepSecurity). Must be the first
+      # step. audit = observe-only, never blocks; the per-run insights link in the
+      # log shows observed endpoints. Graduate to egress-policy: block + an
+      # allowed-endpoints allowlist once a few audit runs have mapped the egress.
+      # Community tier is public-repos-only — applies here (wormhook is public).
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: 24
 
+      # Socket Firewall Free (keyless) installs the `sfw` proxy into the job;
+      # the install step below runs through it so a package flagged malicious
+      # AFTER this lockfile-less `npm install -g` resolves still gets blocked at
+      # fetch time — the time-of-check->time-of-use gap a PR-time scan can't close.
+      - uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
+        with:
+          mode: firewall-free
+
       - name: Install Claude Code CLI
-        run: npm install -g @anthropic-ai/claude-code
+        run: sfw npm install -g @anthropic-ai/claude-code
 
       # Schema-validates marketplace.json, plugin.json, and skill/agent/hook
       # frontmatter. --strict promotes unrecognized-field warnings to errors.

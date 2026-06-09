@@ -1,0 +1,8 @@
+# Files that legitimately DOCUMENT supply-chain IOCs (this repo IS a malware
+# scanner — its corpus of exfil domains and campaign markers is the product, not
+# an infection). Whitespace/newline-separated globs; content-scan hits (domain +
+# marker references) are exempted. Filename/hash/lifecycle checks are NOT exempted
+# upstream, so a real dropper file still trips even if matched here.
+README.md
+scripts/wormhook.sh
+scripts/malware-patterns.sh

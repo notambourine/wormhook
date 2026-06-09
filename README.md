@@ -48,7 +48,7 @@ flowchart TD
     A --> T0
 
     T0["<b>Tier 0</b> — persistence &amp; agent-hook injection<br/><i>cheap stats · ALWAYS · never cached</i>"]:::tier
-    T0 --> T0c{IOC?<br/>~/.dev-env · com.apple.act.mond<br/>.claude/.vscode/.cursor droppers<br/>injected hook / mcpServers entry<br/>poisoned git hook · gh-token-monitor}
+    T0 --> T0c{IOC?<br/>~/.dev-env · com.apple.act.mond<br/>.claude/.vscode/.cursor droppers<br/>injected hook / mcpServers entry<br/>poisoned git hook · gh-token-monitor<br/>weaponized .pth · /tmp/.sshu-setup.js}
     T0c -- hit --> G
     T0c -- clean --> T1
 
@@ -173,6 +173,16 @@ stay silent: no scan ran, so there is no verdict to report.
 - **SANDWORM_MODE** — AI-toolchain poisoning: the `SANDWORM_MODE` marker, the
   `pkg-metrics.*.workers.dev/{exfil,drain}` C2, the `freefan`/`fanfree` DNS-tunnel
   domains, and the hard-coded drain bearer token.
+- **Hades / Miasma PyPI wave** (Mini Shai-Hulud, Jun 2026) — the cross-ecosystem
+  campaign that typosquats MCP packages (`openai-mcp`, `langchain-core-mcp`,
+  `tiktoken-mcp`, …) to ship a **weaponized Python `.pth` startup hook**: Python
+  auto-executes its `import`-prefixed line on every interpreter start, downloading
+  Bun and running a bundled `_index.js` JS stealer (Hades). Caught at Tier 0 as a
+  persistence artifact — the `.pth` (by known name/SHA256 or its behavioral tell: a
+  `.pth` that spawns a process / opens a socket / fetches a URL, none of which a
+  legit sys.path `.pth` does), the `/tmp/.sshu-setup.js` SSH-propagation dropper,
+  and the `thebeautiful{march,snads}oftime` fallback C2-discovery strings in the JS
+  payload. *(`pip`/`uv` are not gated — see [what it deliberately doesn't do](#what-it-deliberately-doesnt-do) — so this is detected as a landed persistence artifact on the next event, not blocked pre-install.)*
 - **Dev-environment & CI injection** (Mini Shai-Hulud / SANDWORM_MODE) — rogue
   `mcpServers` / SessionStart-hook entries in agent + editor configs, poisoned git
   hooks (`init.templateDir` / `core.hooksPath`), `pull_request_target` workflows
@@ -210,6 +220,7 @@ notices *this* one. The vectors it watches and where each is caught:
 | PR editing `.releaserc` to `require()` a carrier on publish | Tier 1 release-config scan |
 | Rogue `mcpServers` / SessionStart hook committed to `.claude`, `.cursor`, … | Tier 0 agent-config scan |
 | `init.templateDir`/`core.hooksPath` pointing at a poisoned git hook | Tier 0 git-hook scan |
+| Weaponized Python `.pth` in a project venv's `site-packages` (Hades/Miasma) | Tier 0 `.pth` startup-hook scan |
 
 `pull_request_target` and `@semantic-release/exec` are *legitimately common*, so
 those scans key off the campaign-specific fingerprints (the known-bad action slug,
@@ -249,6 +260,7 @@ layer you should run alongside:
 | Obfuscated dynamic API calls — `Reflect.get`, bracket-access (guarddog `npm-api-obfuscation`) | Legit metaprogramming, polyfills, and bundlers use these; WARNING-tier triage | GuardDog |
 | Credential-file reads → network exfil (`.aws/credentials`, `/etc/passwd`, `.ssh/id_rsa`; guarddog `npm-exfiltrate-sensitive-data`) | Needs **taint tracking** (the credential must *flow into* the request) — co-occurrence alone FPs on `aws-sdk`, k8s, and ssh libs that legitimately read these *and* make HTTPS calls | GuardDog (`mode: taint`) |
 | Raw-IP / crypto-RPC / APT C2 blocklisting (`api.trongrid.io`, bare IPs) | Matching a raw IP or a legit blockchain RPC in dep *source* is high-FP, low-signal — a connection-time control, not a content one | a DNS/pf network blocklist (e.g. `/etc/hosts` + `pf` table) |
+| **Pre-install gating of `pip`/`uv`/PyPI** (block a malicious `pip install` the way `npm install` is blocked) | The `PreToolUse` hard block is scoped to the npm/node command set; gating Python would need pre-install wheel inspection a no-network hook can't cheaply do. The Hades/PyPI vector is instead caught as a **landed persistence artifact** (the weaponized `.pth`) at Tier 0 on the next event — the same model Tier 0 uses for `~/.dev-env` and `com.apple.act.mond` | an install-time sandbox / [`safedep/vet`](https://github.com/safedep/vet) (PyPI) / [GuardDog](https://github.com/DataDog/guarddog) |
 
 The design bet is **independence over coverage**: a fast, no-network, near-zero-FP
 gate at the agent boundary that trips on a specific, evidence-backed set of
@@ -276,6 +288,7 @@ second-hand summaries. Each campaign's IOCs trace to one of these:
 - **Wiz** — [Mini Shai-Hulud strikes again: TanStack & more npm packages compromised](https://www.wiz.io/blog/mini-shai-hulud-strikes-again-tanstack-more-npm-packages-compromised) (`router_init.js`, `.claude`/`.vscode` persistence, `git-tanstack.com` + Session-network exfil, `gh-token-monitor`)
 - **Semgrep** — [Axios supply-chain incident: IOCs and how to contain the threat](https://semgrep.dev/blog/2026/axios-supply-chain-incident-indicators-of-compromise-and-how-to-contain-the-threat/) (Sapphire Sleet / DPRK RAT, `com.apple.act.mond`, `sfrclak.com` C2)
 - **Socket** — [SANDWORM_MODE npm worm: AI-toolchain poisoning](https://socket.dev/blog/sandworm-mode-npm-worm-ai-toolchain-poisoning) (MCP/agent-config injection, git-hook & `pull_request_target` persistence, `@semantic-release/exec` carrier, `*.workers.dev` drain endpoints, DNS tunneling)
+- **Socket** — [Mini Shai-Hulud, Miasma & Hades worms target bioinformatics and MCP developers](https://socket.dev/blog/mini-shai-hulud-miasma-and-hades-worms-target-bioinformatics-and-mcp-developers-via-malicious) (PyPI MCP typosquats, weaponized `*.pth` startup hook → Bun → `_index.js` Hades stealer, `langchain_core-setup.pth` SHA256, `/tmp/.sshu-setup.js` SSH propagation, `thebeautiful{march,snads}oftime` C2-discovery strings)
 
 The same list, with the specific marker each advisory contributed, is mirrored in
 the header of [`scripts/wormhook.sh`](./scripts/wormhook.sh) so the provenance sits

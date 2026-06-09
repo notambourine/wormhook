@@ -12,6 +12,11 @@
 #       via .claude/.vscode setup.mjs + router_runtime.js + injected SessionStart hooks
 #   - SANDWORM_MODE (Feb 2026): AI toolchain poisoning, MCP injection, SSH propagation
 #   - Axios/plain-crypto-js (Mar 2026): Sapphire Sleet (DPRK) RAT via sfrclak.com C2
+#   - Hades/Miasma/Mini Shai-Hulud PyPI wave (Jun 2026): MCP-typosquat PyPI packages
+#       (openai-mcp, langchain-core-mcp, tiktoken-mcp, instructor-mcp, ...) ship a
+#       weaponized *.pth startup hook that downloads Bun + runs _index.js (Hades JS
+#       stealer); /tmp/.sshu-setup.js SSH propagation; thebeautiful{march,snads}oftime
+#       fallback C2-discovery strings. Targets bioinformatics + MCP developers.
 #   - Remote-eval loader (recurring): atob(process.env.FAKE_KEY) -> fetch -> eval
 #   - CISA: https://www.cisa.gov/news-events/alerts/2025/09/23/widespread-supply-chain-compromise-impacting-npm-ecosystem
 #   - Datadog: https://securitylabs.datadoghq.com/articles/shai-hulud-2.0-npm-worm/
@@ -19,6 +24,7 @@
 #   - Wiz (Mini): https://www.wiz.io/blog/mini-shai-hulud-strikes-again-tanstack-more-npm-packages-compromised
 #   - Semgrep: https://semgrep.dev/blog/2026/axios-supply-chain-incident-indicators-of-compromise-and-how-to-contain-the-threat/
 #   - Socket: https://socket.dev/blog/sandworm-mode-npm-worm-ai-toolchain-poisoning
+#   - Socket (Jun 2026): https://socket.dev/blog/mini-shai-hulud-miasma-and-hades-worms-target-bioinformatics-and-mcp-developers-via-malicious
 #
 # KEY-DECISION 2026-06-01: tiered execution. Scanning node_modules costs ~4-27s on a
 # large repo (8600 files) but it only changes on install; the source/persistence scans
@@ -343,6 +349,72 @@ Immediate steps:
 BODY
 )"
 done
+
+# Hades/Miasma SSH-propagation dropper (PyPI wave). The JS stealer writes this to
+# spread over SSH to other hosts — its presence means the payload already executed.
+if [[ -f "/tmp/.sshu-setup.js" ]]; then
+  alert "HADES SSH-PROPAGATION DROPPER DETECTED" "$(cat <<BODY
+Found Hades/Miasma SSH-propagation dropper at: /tmp/.sshu-setup.js
+This is written by the Bun-staged JS stealer to spread over SSH to other hosts —
+its presence means the payload has ALREADY run on this machine.
+${COMMAND:+Command blocked: $COMMAND}
+
+Immediate steps:
+  1. Remove: command rm -f /tmp/.sshu-setup.js
+  2. Check: ps aux | grep -iE 'bun|_index\.js' (kill any running stager)
+  3. Audit ~/.ssh/known_hosts + authorized_keys and recent SSH egress for spread
+  4. Rotate ALL credentials (SSH keys, GitHub PATs/OIDC, npm/PyPI tokens, cloud)
+  5. Inspect site-packages *.pth startup hooks (the PyPI delivery vector)
+BODY
+)"
+fi
+
+# Weaponized Python .pth startup hook (Hades/Miasma PyPI wave). A malicious PyPI
+# package (MCP typosquats like openai-mcp / langchain-core-mcp) drops a *.pth into
+# site-packages; Python AUTO-RUNS its import-prefixed line on every interpreter
+# start, downloading Bun and executing the bundled _index.js stealer. This is a
+# persistence hook in the same class as an injected SessionStart hook — caught here
+# regardless of how it arrived (pip/uv are not gated). Bounded find over the
+# project's venv layouts + any stray committed .pth; legit .pth files only touch
+# sys.path, so MALWARE_PTH_RE (process spawn / socket / URL fetch / bun) is near-0 FP.
+pth_files=()
+while IFS= read -r _p; do [[ -n "$_p" ]] && pth_files+=("$_p"); done < <(
+  timeout 5 find "${CWD}/.venv" "${CWD}/venv" "${CWD}/env" "${CWD}/.tox" \
+    -maxdepth 4 -name '*.pth' -type f 2>/dev/null
+)
+for _p in "${CWD}"/*.pth; do [[ -f "$_p" ]] && pth_files+=("$_p"); done
+if [[ ${#pth_files[@]} -gt 0 ]]; then
+  for pth in "${pth_files[@]}"; do
+    pth_reason="" pth_base="${pth##*/}"
+    if [[ "$pth_base" == "$MALWARE_PTH_IOC_NAME" ]]; then
+      pth_reason="known-bad filename ($MALWARE_PTH_IOC_NAME)"
+    elif [[ "$(shasum -a 256 "$pth" 2>/dev/null | awk '{print $1}')" == "$MALWARE_PTH_IOC_HASH" ]]; then
+      pth_reason="known-bad SHA256 ($MALWARE_PTH_IOC_HASH)"
+    else
+      pth_m=$(grep -niE "$MALWARE_PTH_RE" "$pth" 2>/dev/null | head -1)
+      [[ -n "$pth_m" ]] && pth_reason="executes code on interpreter start: $pth_m"
+    fi
+    [[ -z "$pth_reason" ]] && continue
+    alert "MALICIOUS PYTHON .pth STARTUP HOOK DETECTED" "$(cat <<BODY
+A Python .pth startup hook runs code on every interpreter start:
+  $pth
+  $pth_reason
+${COMMAND:+Command blocked: $COMMAND}
+The Hades/Miasma PyPI wave (MCP typosquats: openai-mcp, langchain-core-mcp,
+tiktoken-mcp, ...) drops a *.pth into site-packages that downloads Bun and runs a
+bundled _index.js credential stealer — auto-executed by Python with no install step.
+
+Immediate steps:
+  1. Remove the .pth: command rm -f "$pth"
+  2. Uninstall the carrier package and purge its site-packages dir
+  3. Check: ls -la /tmp/.sshu-setup.js ; ps aux | grep -iE 'bun|_index\.js'
+  4. pip/uv list — audit for typosquats (openai-mcp, langchain-core-mcp, mem8, …)
+  5. Rotate ALL credentials (PyPI/npm tokens, GitHub PATs/OIDC, SSH keys, cloud, LLM API keys)
+  6. Reinstall Python deps from a clean, pinned, hash-verified lockfile
+BODY
+)"
+  done
+fi
 
 # ══ TIER 1: project source + package.json lifecycle — cheap (~26ms), every event ══
 if [[ "$RUN_T1" == 1 ]]; then

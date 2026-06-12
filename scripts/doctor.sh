@@ -11,8 +11,9 @@
 # (contrast wormhook.sh, which embeds scanned paths/commands and must route
 # them through jq --arg to stay injection-proof). Do not add dynamic content
 # to these messages without switching the emission to jq. Sole exception:
-# version strings in the drift check below, which pass a strict
-# [0-9A-Za-z.+-] whitelist before interpolation — anything else is dropped.
+# the drift check below interpolates the two version strings AND the
+# marketplace slug — all three pass a strict [0-9A-Za-z._+-] whitelist
+# before interpolation; anything else drops the whole message.
 set -uo pipefail
 
 missing=""
@@ -42,7 +43,7 @@ case "$PLUGIN_ROOT" in
     self_ver=$(_ver "$PLUGIN_ROOT/.claude-plugin/plugin.json")
     mkt_ver=$(_ver "${PLUGIN_ROOT%/cache/*}/marketplaces/$mkt/.claude-plugin/plugin.json")
     if [[ -n "$self_ver" && -n "$mkt_ver" && "$self_ver" != "$mkt_ver" && \
-          "$self_ver$mkt_ver" != *[!0-9A-Za-z.+-]* ]]; then
+          "$self_ver$mkt_ver$mkt" != *[!0-9A-Za-z._+-]* ]]; then
       note "running v$self_ver but marketplace has v$mkt_ver — run: claude plugin update wormhook@$mkt"
     fi
     ;;

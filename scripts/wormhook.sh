@@ -106,10 +106,12 @@ _tree_mtime() {
   # Build-tool scratch dirs (.cache: prettier/babel/eslint; .vite: dev-server
   # optimizer) are pruned from the KEY ONLY: they churn on every format/build,
   # invalidating the clean-scan marker daily for repos whose deps never changed.
-  # Tier 2 itself still walks them when it runs — a payload planted there is
-  # caught by the next real scan, just not key-detected between installs.
-  # NOTE: node_modules root mtime still bumps when an entry is added/removed
-  # directly under it, so pruning only hides churn INSIDE these dirs.
+  # ACCEPTED GAP: a payload planted inside a pruned dir is key-invisible — Tier 2
+  # only re-walks it when the lockfile or a tracked dir changes, a window that
+  # can stay open indefinitely in a stable repo. Accepted because these dirs are
+  # tool-managed scratch, not require()d code paths, and the alternative was a
+  # daily false re-scan. NOTE: creating/removing the pruned dir itself still
+  # bumps node_modules' root mtime; only churn INSIDE these dirs is hidden.
   local statv=(stat -c %Y)                       # GNU
   stat -f %m "$NODE_MODULES" &>/dev/null && statv=(stat -f %m)  # BSD/macOS
   local m

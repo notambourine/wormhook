@@ -102,10 +102,20 @@ _tree_mtime() {
   # hand-planted node_modules/<pkg>/payload between installs rode the clean
   # cache until the lockfile changed. Empty/timeout output => 0 => key mismatch
   # => Tier 2 re-scans (degradation fails toward scanning, never away from it).
+  #
+  # Build-tool scratch dirs (.cache: prettier/babel/eslint; .vite: dev-server
+  # optimizer) are pruned from the KEY ONLY: they churn on every format/build,
+  # invalidating the clean-scan marker daily for repos whose deps never changed.
+  # ACCEPTED GAP: a payload planted inside a pruned dir is key-invisible — Tier 2
+  # only re-walks it when the lockfile or a tracked dir changes, a window that
+  # can stay open indefinitely in a stable repo. Accepted because these dirs are
+  # tool-managed scratch, not require()d code paths, and the alternative was a
+  # daily false re-scan. NOTE: creating/removing the pruned dir itself still
+  # bumps node_modules' root mtime; only churn INSIDE these dirs is hidden.
   local statv=(stat -c %Y)                       # GNU
   stat -f %m "$NODE_MODULES" &>/dev/null && statv=(stat -f %m)  # BSD/macOS
   local m
-  m=$(timeout 5 find "$NODE_MODULES" -maxdepth 2 -type d -exec "${statv[@]}" {} + 2>/dev/null | sort -rn | head -n1)
+  m=$(timeout 5 find "$NODE_MODULES" -maxdepth 2 \( -name .cache -o -name .vite \) -prune -o -type d -exec "${statv[@]}" {} + 2>/dev/null | sort -rn | head -n1)
   printf '%s' "${m:-0}"
 }
 _scan_key() {
@@ -607,13 +617,19 @@ BODY
 
   # Content fingerprints: ONE combined gate pass (was 14 separate walks). On a hit —
   # rare — re-grep the single offending file per-pattern to name the campaign.
+  # Name the engine in the timeout warning: "timed out" with no engine hid a
+  # week of grep-fallback timeouts whose actual cause (no rg in the executing
+  # copy) was diagnosable from the message alone. Engine label must be set
+  # BEFORE the scan so the $? test still sees the scan's exit status.
   if _rg_ok "$MALWARE_CONTENT_RE"; then
+    t2_engine="rg"
     hit_out=$(timeout 20 "$RG_BIN" -la --max-count=1 --no-ignore --hidden \
       -g '*.{js,mjs,cjs}' -e "$MALWARE_CONTENT_RE" "$NODE_MODULES" 2>/dev/null)
   else
+    t2_engine="grep fallback; rg missing or pattern incompatible"
     hit_out=$(timeout 20 grep -rlEm1 --include="*.js" --include="*.mjs" --include="*.cjs" "$MALWARE_CONTENT_RE" "$NODE_MODULES" 2>/dev/null)
   fi
-  [[ $? -eq 124 ]] && warn "node_modules content scan timed out at 20s (coverage incomplete)"
+  [[ $? -eq 124 ]] && warn "node_modules content scan ($t2_engine) timed out at 20s (coverage incomplete)"
   hitfile=$(head -n1 <<<"$hit_out")
   if [[ -n "$hitfile" ]]; then
     matched="(unidentified)"

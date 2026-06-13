@@ -36,9 +36,15 @@ that aren't obvious from the code.
   never refreshes the clean-scan cache) — it never bricks `npm`/`node` and never silently
   passes as 🟢. The one tier with no `timeout` ceiling is Tier 1, the *blocking* tier: a
   truncated walk there is a coverage hole, not an acceptable degradation.
-- **Signatures only get a block-tier home if they're near-zero-FP.** Higher-FP behavioral
-  patterns are scoped to the `node_modules` tier (third-party deps); see README's
-  "deliberately doesn't do" for what's held back and why. The line is FP-safety, not effort.
+- **FP-tolerance scales with blast radius — route a noisy-but-real signature down a tier,
+  do not drop it.** A block-tier match (PreToolUse / UserPromptSubmit) bricks a clean
+  `npm install` or a human turn and is un-workaroundable, so it demands a near-zero-FP,
+  evidence-backed signature. A `node_modules`/warn-tier match is a 🟡 you clear, so it
+  tolerates higher-FP behavioral patterns. So the behavioral heuristics (`/dev/tcp/`,
+  decode-then-eval) live in the `node_modules` tier, not the project-source block — see
+  `malware-patterns.sh` and README's "deliberately doesn't do". A missed detection is worse
+  than a cleared warning: when a real signature is too noisy for the block tier, move it to
+  a lower-blast tier rather than discard it.
 - **No network calls — ever.** Every tier is local (stat/grep/jq over the filesystem). The
   install-time registry-firewall job (malicious-version blocking, typosquats, publish-age/
   reputation) is **ceded to Socket Firewall (`sfw`) + `safedep/vet`**; `doctor.sh` nudges the

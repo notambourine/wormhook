@@ -21,9 +21,12 @@ that aren't obvious from the code.
 - **Behavior PRs must bump `.claude-plugin/plugin.json`.** A CI tripwire fails the PR if
   the version doesn't move forward on a behavioral change. README/comment-only changes
   don't need it; anything touching the scripts does.
-- **`plugin.json` and `marketplace.json` descriptions must match byte-for-byte.** A separate
-  CI check (`Check description parity`) fails the PR on drift. If you edit one `description`,
-  edit the other — `.claude-plugin/marketplace.json`'s `.plugins[] | select(.name=="wormhook")`.
+- **The two `description` fields serve different roles — keep them different, do not sync them.**
+  `marketplace.json`'s is a short browse-list **tagline** (one line, what+why); `plugin.json`'s is
+  the **full** install/inspect description (the campaign + IOC detail). The plugin platform has no
+  shared-field / `$ref` mechanism, so a byte-identical copy is just drift waiting to happen — we
+  deliberately gave each a distinct job instead, and there is **no parity check**. Edit whichever
+  fits the surface; do not mirror one into the other.
 - **`doctor.sh` stays `jq`-free.** It's the watchdog for the case where `wormhook.sh`
   can't run (missing `jq`), so it depends on nothing but bash. Its JSON is hand-rolled
   and safe *only because every string is static* — don't interpolate dynamic content
@@ -36,9 +39,15 @@ that aren't obvious from the code.
   never refreshes the clean-scan cache) — it never bricks `npm`/`node` and never silently
   passes as 🟢. The one tier with no `timeout` ceiling is Tier 1, the *blocking* tier: a
   truncated walk there is a coverage hole, not an acceptable degradation.
-- **Signatures only get a block-tier home if they're near-zero-FP.** Higher-FP behavioral
-  patterns are scoped to the `node_modules` tier (third-party deps); see README's
-  "deliberately doesn't do" for what's held back and why. The line is FP-safety, not effort.
+- **FP-tolerance scales with blast radius — route a noisy-but-real signature down a tier,
+  do not drop it.** A block-tier match (PreToolUse / UserPromptSubmit) bricks a clean
+  `npm install` or a human turn and is un-workaroundable, so it demands a near-zero-FP,
+  evidence-backed signature. A `node_modules`/warn-tier match is a 🟡 you clear, so it
+  tolerates higher-FP behavioral patterns. So the behavioral heuristics (`/dev/tcp/`,
+  decode-then-eval) live in the `node_modules` tier, not the project-source block — see
+  `malware-patterns.sh` and README's "deliberately doesn't do". A missed detection is worse
+  than a cleared warning: when a real signature is too noisy for the block tier, move it to
+  a lower-blast tier rather than discard it.
 - **No network calls — ever.** Every tier is local (stat/grep/jq over the filesystem). The
   install-time registry-firewall job (malicious-version blocking, typosquats, publish-age/
   reputation) is **ceded to Socket Firewall (`sfw`) + `safedep/vet`**; `doctor.sh` nudges the

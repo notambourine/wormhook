@@ -12,6 +12,16 @@ firewall ([Socket Firewall](https://socket.dev/)) or a dependency auditor
 Claude Code agent boundary. Run it **alongside** those, not instead of them; the value
 is independence — a worm that slips one lock still has to beat the others.
 
+**Why this and not just pnpm/Socket?** The install layer is now well-served: pnpm 11 ships
+a release-age [cooldown by default](https://pnpm.io/supply-chain-security) and Socket Firewall
+blocks malicious versions as you install. wormhook deliberately cedes that boundary. Its
+distinct, currently-unoccupied job is *blocking* — not warn-only — on **agent-boundary
+persistence / AGENT-HIJACK**: rogue `SessionStart` hooks and `mcpServers` entries injected
+into `.claude`/`.cursor`/`.continue`/`.vscode` configs, `.vscode/tasks.json` `folderOpen`
+auto-exec, weaponized Python `.pth` startup hooks, poisoned git hooks, and login-persistent
+LaunchAgent/systemd units. That is the half of the supply-chain kill-chain the registry-layer
+tools do not see — and the half that re-runs every time you open the project.
+
 Built and maintained by [NoTambourine](https://notambourine.com).
 
 ## Install
@@ -150,6 +160,11 @@ refreshes the cache), 🚨 findings. Non-gated commands stay silent.
 
 - **Shai-Hulud 1.0–3.0 + the Mini variant** — obfuscation markers, runner fingerprints,
   ransom tokens, `git-tanstack` typosquat exfil, payload filenames, SHA256 IOCs.
+- **SAP-CAP / AntV / TeamPCP wave** (Apr–Jun 2026) — the unique payload-internal strings
+  (`ctf-scramble-v2` PBKDF2 salt, the `firedalazer` / `OhNoWhatsGoingOnWithGitHub` GitHub-
+  commit-search C2 keywords, the `__DAEMONIZED` guard, the russian-locale kill-switch),
+  attacker C2 hosts (`audit.checkmarx.cx`, `api.cloud-aws.adc-e.uk`), and the `kitty-monitor`
+  LaunchAgent/systemd persistence unit + its `~/.local/share/kitty/cat.py` daemon.
 - **Axios / plain-crypto-js RAT** (Sapphire Sleet / DPRK) — `com.apple.act.mond`
   persistence, `sfrclak` C2 beacons.
 - **SANDWORM_MODE** — AI-toolchain poisoning: the marker, `*.workers.dev/{exfil,drain}`
@@ -159,8 +174,10 @@ refreshes the cache), 🚨 findings. Non-gated commands stay silent.
   `/tmp/.sshu-setup.js` SSH propagation. Caught at Tier 0, and `pip`/`uv`/`python` now
   [trigger that scan at `PreToolUse`](#beyond-the-tiers) so it runs **before** the interpreter
   auto-executes a poisoned `.pth` — not just on the next npm/git command.
-- **Dev-env & CI injection** — rogue `mcpServers`/SessionStart-hook entries, poisoned git
-  hooks (`init.templateDir`/`core.hooksPath`), `pull_request_target` workflows calling the
+- **Dev-env & CI injection** — rogue `mcpServers`/SessionStart-hook entries across
+  `.claude`/`.cursor`/`.continue`/`.vscode` (including a `.vscode/tasks.json` `folderOpen`
+  task that re-runs `setup.mjs` on every project open), poisoned git hooks
+  (`init.templateDir`/`core.hooksPath`), `pull_request_target` workflows calling the
   `ci-quality/code-quality-check` action, `@semantic-release/exec` carrier injection.
 - **Remote-eval loaders** — `atob(process.env.…)` + `eval`/`Function(await …)` behavioral
   fingerprints, plus field-observed C2/exfil hosts.
@@ -183,7 +200,8 @@ you to install the install-firewall ones (Socket Firewall, `vet`).
 
 | Check it doesn't do | Layer that owns it |
 |---------------------|--------------------|
-| Package existence / typosquatting / version-age / maintainer-change (needs registry lookups) | [Socket Firewall](https://docs.socket.dev/docs/socket-firewall), [`safedep/vet`](https://github.com/safedep/vet) |
+| Package existence / typosquatting / maintainer-change (needs registry lookups) | [Socket Firewall](https://docs.socket.dev/docs/socket-firewall), [`safedep/vet`](https://github.com/safedep/vet) |
+| Version-age "cooldown" (refuse versions published in the last N days) | **native now**: pnpm [`minimumReleaseAge`](https://pnpm.io/supply-chain-security) (default-on in pnpm 11), npm `min-release-age`; also Socket Firewall |
 | Known-CVE scanning (needs an advisory feed) | `vet`, `npm audit`, Dependabot |
 | Secret detection | `gitleaks`, `trufflehog` |
 | Generic Actions hardening (unpinned actions, broad perms) | `actionlint`, `zizmor` |
@@ -213,6 +231,9 @@ mirrored in the header of [`scripts/wormhook.sh`](./scripts/wormhook.sh)):
 - **Wiz** — [Mini Shai-Hulud: TanStack & more](https://www.wiz.io/blog/mini-shai-hulud-strikes-again-tanstack-more-npm-packages-compromised)
 - **Semgrep** — [Axios supply-chain incident](https://semgrep.dev/blog/2026/axios-supply-chain-incident-indicators-of-compromise-and-how-to-contain-the-threat/)
 - **Socket** — [SANDWORM_MODE](https://socket.dev/blog/sandworm-mode-npm-worm-ai-toolchain-poisoning) · [Miasma & Hades (PyPI/MCP)](https://socket.dev/blog/mini-shai-hulud-miasma-and-hades-worms-target-bioinformatics-and-mcp-developers-via-malicious)
+- **Snyk** — [Mini Shai-Hulud hits AntV](https://snyk.io/blog/mini-shai-hulud-antv-npm-supply-chain-attack/) (`kitty-monitor`, `firedalazer`, `.vscode/tasks.json` `folderOpen`)
+- **Unit 42** — [Monitoring npm supply-chain attacks](https://unit42.paloaltonetworks.com/monitoring-npm-supply-chain-attacks/) (`audit.checkmarx.cx`, `OhNoWhatsGoingOnWithGitHub` C2)
+- **Mend** — [Shai-Hulud SAP CAP via Claude Code](https://www.mend.io/blog/shai-hulud-sap-cap-supply-chain-attack-claude-code/) (`ctf-scramble-v2`, `__DAEMONIZED`, russian-locale kill-switch, `api.cloud-aws.adc-e.uk`)
 
 ## License
 

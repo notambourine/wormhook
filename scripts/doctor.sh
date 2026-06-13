@@ -40,8 +40,11 @@ command -v rg &>/dev/null || \
 #   - Socket Firewall (sfw): wraps the package manager and blocks risky installs live.
 #   - safedep/vet: dependency CVE + malicious-package + license scan.
 # Static strings only (preserves the jq-free, no-dynamic-interpolation invariant above).
+# NB: Socket Firewall had an untrusted-dir .sfw.config RCE (CVE-2025-64726, fixed 0.15.5);
+# the nudge says "keep it current" rather than pin a version floor — a hard-coded floor
+# goes stale, and a static "keep current" string preserves the no-interpolation invariant.
 command -v sfw &>/dev/null || \
-  note "Socket Firewall (sfw) not found — install-time registry firewall missing; pair it with wormhook (install: https://docs.socket.dev/docs/socket-firewall)"
+  note "Socket Firewall (sfw) not found — install-time registry firewall missing; pair it with wormhook and keep it current (install: https://docs.socket.dev/docs/socket-firewall)"
 command -v vet &>/dev/null || \
   note "safedep/vet not found — no dependency CVE/malicious-package audit (install: https://github.com/safedep/vet)"
 

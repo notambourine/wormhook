@@ -19,9 +19,13 @@
 #   - Shai-Hulud 1.0 (Sep 2025): global['!']=X-YYYY fingerprint, crypto drainer
 #   - Shai-Hulud 2.0 (Nov 2025): self-replicating worm, GitHub exfil, 796 packages
 #   - Shai-Hulud 3.0 (Dec 2025): enhanced obfuscation, "Goldox-T3chs" marker, c0nt3nts.json
-#   - Mini Shai-Hulud (Apr-May 2026): cross-ecosystem (npm+PyPI), TanStack/SAP/AntV,
-#       git-tanstack.com typosquat + Session-network exfil, AGENT-HIJACK persistence
-#       via .claude/.vscode setup.mjs + router_runtime.js + injected SessionStart hooks
+#   - Mini Shai-Hulud (Apr-Jun 2026): cross-ecosystem (npm+PyPI), TanStack/SAP-CAP/AntV/
+#       TeamPCP, git-tanstack.com typosquat + Session-network exfil, AGENT-HIJACK persistence
+#       via .claude/.vscode setup.mjs + router_runtime.js + injected SessionStart hooks +
+#       .vscode/tasks.json "runOn":"folderOpen"; kitty-monitor LaunchAgent/systemd unit +
+#       ~/.local/share/kitty/cat.py daemon; ctf-scramble-v2 PBKDF2 salt, firedalazer /
+#       OhNoWhatsGoingOnWithGitHub C2 keywords, __DAEMONIZED guard, russian-locale kill-switch,
+#       audit.checkmarx.cx + api.cloud-aws.adc-e.uk C2
 #   - SANDWORM_MODE (Feb 2026): AI toolchain poisoning, MCP injection, SSH propagation
 #   - Axios/plain-crypto-js (Mar 2026): Sapphire Sleet (DPRK) RAT via sfrclak.com C2
 #   - Hades/Miasma/Mini Shai-Hulud PyPI wave (Jun 2026): MCP-typosquat PyPI packages
@@ -37,6 +41,9 @@
 #   - Semgrep: https://semgrep.dev/blog/2026/axios-supply-chain-incident-indicators-of-compromise-and-how-to-contain-the-threat/
 #   - Socket: https://socket.dev/blog/sandworm-mode-npm-worm-ai-toolchain-poisoning
 #   - Socket (Jun 2026): https://socket.dev/blog/mini-shai-hulud-miasma-and-hades-worms-target-bioinformatics-and-mcp-developers-via-malicious
+#   - Snyk (AntV, May 2026): https://snyk.io/blog/mini-shai-hulud-antv-npm-supply-chain-attack/
+#   - Unit42 (TeamPCP/npm landscape): https://unit42.paloaltonetworks.com/monitoring-npm-supply-chain-attacks/
+#   - Mend (SAP-CAP via Claude Code): https://www.mend.io/blog/shai-hulud-sap-cap-supply-chain-attack-claude-code/
 #
 # KEY-DECISION 2026-06-01: tiered execution. Scanning node_modules costs ~4-27s on a
 # large repo (8600 files) but it only changes on install; the source/persistence scans
@@ -349,15 +356,17 @@ done
 
 # Agent-config injection CHAIN: the dropper wires itself into an AI-agent/editor
 # config so it re-runs on launch — as a SessionStart hook (Mini Shai-Hulud) OR a
-# rogue MCP server entry (SANDWORM_MODE). Detecting the WIRED entry (not just the
-# file) catches the case where the dropper ran once, injected the config, then
-# deleted its on-disk file. Schemas differ across tools, so scan EVERY string value;
-# the dropper-token set is specific enough that any hit is high-signal.
+# rogue MCP server entry (SANDWORM_MODE) OR a VS Code task with "runOn":"folderOpen"
+# (SAP-CAP/AntV wave: the task re-runs `node .claude/setup.mjs` on every project open).
+# Detecting the WIRED entry (not just the file) catches the case where the dropper ran
+# once, injected the config, then deleted its on-disk file. Schemas differ across tools,
+# so scan EVERY string value; the dropper-token set is specific enough that any hit is
+# high-signal (a malicious folderOpen task references setup.mjs, already a dropper token).
 for cfg in \
   "${CWD}/.claude/settings.json"  "${HOME}/.claude/settings.json" \
   "${CWD}/.cursor/mcp.json"       "${HOME}/.cursor/mcp.json" \
   "${CWD}/.vscode/mcp.json"       "${HOME}/.continue/config.json" \
-  "${HOME}/.windsurf/mcp.json"; do
+  "${CWD}/.vscode/tasks.json"     "${HOME}/.windsurf/mcp.json"; do
   [[ -f "$cfg" ]] || continue
   cfg_hit=$(jq -r '[.. | strings] | .[]' "$cfg" 2>/dev/null \
     | grep -iE "$MALWARE_DROPPER_TOKENS_RE" | head -1)
@@ -426,6 +435,35 @@ Immediate steps:
      (Linux: systemctl --user disable --now gh-token-monitor; rm "$gp")
   2. Rotate ALL GitHub PATs/OIDC trusts and npm tokens
   3. Check: ps aux | grep -i gh-token
+BODY
+)"
+done
+
+# kitty-monitor persistence (AntV/TeamPCP wave). A background daemon (cat.py) is
+# installed under ~/.local/share/kitty/ and registered as a login-persistent unit —
+# a LaunchAgent on macOS, a systemd user service on Linux — that polls the GitHub
+# commit-search API hourly for attacker commands. Same class as gh-token-monitor above;
+# the unit names and the cat.py path are campaign-specific (Snyk AntV, verbatim).
+for kp in \
+  "${HOME}/Library/LaunchAgents/com.user.kitty-monitor.plist" \
+  "${HOME}/.config/systemd/user/kitty-monitor.service" \
+  "${HOME}/.local/share/kitty/cat.py"; do
+  [[ -e "$kp" ]] || continue
+  alert "KITTY-MONITOR PERSISTENCE DETECTED" "$(cat <<BODY
+Found AntV/TeamPCP-wave persistence artifact: $kp
+This installs a background daemon (~/.local/share/kitty/cat.py) that polls the GitHub
+commit-search API hourly for attacker commands — its presence means the payload has
+ALREADY run on this machine.
+${COMMAND:+Command blocked: $COMMAND}
+
+Immediate steps:
+  1. Unload: launchctl unload "\$HOME/Library/LaunchAgents/com.user.kitty-monitor.plist" 2>/dev/null
+     (Linux: systemctl --user disable --now kitty-monitor)
+  2. Remove: command rm -f "\$HOME/Library/LaunchAgents/com.user.kitty-monitor.plist" \\
+       "\$HOME/.config/systemd/user/kitty-monitor.service" "\$HOME/.local/share/kitty/cat.py"
+  3. Check: ps aux | grep -iE 'kitty.*cat\.py|cat\.py' (kill any running daemon)
+  4. Rotate ALL GitHub PATs/OIDC trusts, npm tokens, SSH keys, cloud + LLM API keys
+  5. git log --all --since="2026-04-01" for unexpected commits / impersonation
 BODY
 )"
 done

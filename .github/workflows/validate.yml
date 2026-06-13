@@ -45,20 +45,11 @@ jobs:
       - name: Validate plugin + marketplace schema
         run: claude plugin validate . --strict
 
-      # claude plugin validate does NOT check that the two description fields
-      # agree -- they are allowed to differ by design. This repo keeps them in
-      # sync deliberately, so guard against silent drift.
-      - name: Check description parity (plugin.json <-> marketplace.json)
-        run: |
-          plugin_desc=$(jq -r '.description' .claude-plugin/plugin.json)
-          market_desc=$(jq -r '.plugins[] | select(.name == "wormhook") | .description' .claude-plugin/marketplace.json)
-          if [ "$plugin_desc" != "$market_desc" ]; then
-            echo "::error::description drift between plugin.json and marketplace.json"
-            echo "  plugin.json:      $plugin_desc"
-            echo "  marketplace.json: $market_desc"
-            exit 1
-          fi
-          echo "descriptions match: $plugin_desc"
+      # NB: the two description fields serve DIFFERENT roles by design and are NOT
+      # kept in sync -- marketplace.json carries a short browse-list tagline, plugin.json
+      # the full IOC detail shown at install/inspect time. There is intentionally no
+      # parity check (the platform has no shared-field mechanism, so a copy would only
+      # be drift waiting to happen). See CLAUDE.md "Invariants".
 
       # The hook is the whole product here -- lint it so a broken edit can't ship.
       - name: ShellCheck the scanner

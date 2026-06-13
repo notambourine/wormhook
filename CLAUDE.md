@@ -12,7 +12,8 @@ that aren't obvious from the code.
 - `scripts/malware-patterns.sh` — **single source of truth** for signatures, sourced by
   the hook. Add a campaign here once and every tier picks it up. Extended-regex only
   (must parse identically under bash and zsh).
-- `scripts/doctor.sh` — silent-unless-degraded SessionStart health check (deps + version drift).
+- `scripts/doctor.sh` — silent-unless-degraded SessionStart health check (wormhook deps +
+  version drift + a nudge to install the ceded install-firewall layer: Socket Firewall, `vet`).
 - `hooks/hooks.json` — event → script wiring. `.claude-plugin/{plugin,marketplace}.json` — manifests.
 
 ## Invariants (don't break these)
@@ -38,12 +39,13 @@ that aren't obvious from the code.
 - **Signatures only get a block-tier home if they're near-zero-FP.** Higher-FP behavioral
   patterns are scoped to the `node_modules` tier (third-party deps); see README's
   "deliberately doesn't do" for what's held back and why. The line is FP-safety, not effort.
-- **The cooldown is the *only* network call.** `cooldown_check` (the unknown-worm publish-age
-  gate) does one metadata `GET` to `registry.npmjs.org` via **`curl`, never `npm`** (a
-  compromised `npm` binary must not be in the trust path), `--max-time`-bounded, fail-open-loud
-  (`warn()` → 🟡, never block, never cache), `WORMHOOK_COOLDOWN_HOURS=0` opt-out. It fires
-  **only** on `PreToolUse` install-class with an explicit named package target. Don't add
-  network calls anywhere else, and don't route this one through `npm`.
+- **No network calls — ever.** Every tier is local (stat/grep/jq over the filesystem). The
+  install-time registry-firewall job (malicious-version blocking, typosquats, publish-age/
+  reputation) is **ceded to Socket Firewall (`sfw`) + `safedep/vet`**; `doctor.sh` nudges the
+  user to install them. If you're tempted to add a registry lookup (e.g. a publish-age
+  "cooldown"), that belongs in `sfw`/`vet`, not here — independence and zero-network are the
+  design bet, and a hook can't transparently route an install through a firewall anyway (it
+  can only allow/deny). See README "deliberately doesn't do".
 
 ## Dispatch model
 
@@ -58,8 +60,7 @@ that aren't obvious from the code.
   files don't exist yet, so a pre-scan is pure cost.
 - `PYGATE_RE` (pip/pip3/pipx/uv/python/python3) is **PreToolUse** → T0+T1 only. The point is
   to run the Tier-0 `.pth` sweep *before* the interpreter auto-executes a poisoned
-  site-packages startup hook. **Never T2** (node_modules irrelevant), **never `cooldown_check`**
-  (npm-registry-specific; a PyPI cooldown is future work). `PYINSTALL_RE` is the PostToolUse
+  site-packages startup hook. **Never T2** (node_modules irrelevant). `PYINSTALL_RE` is the PostToolUse
   subset (a fresh `.pth` can land) → T0+T1 re-scan. `make`/`./` are deliberately *not* gated:
   too broad, no matching signatures, pure FP/latency tax — gate only where coverage exists.
 - `UserPromptSubmit` is the **continuous monitor**: T0+T1 only (the fast-changing tiers),

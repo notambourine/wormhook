@@ -23,11 +23,11 @@ claude plugin install wormhook@notambourine --scope user
 
 Requires `jq` and `bash`. [`ripgrep`](https://github.com/BurntSushi/ripgrep) is
 optional but strongly recommended — content scans use it when present (43× faster than
-BSD grep on large trees) and fall back to `grep` otherwise. `curl` is a soft dependency
-for the [version cooldown](#beyond-the-tiers) (without it the cooldown fails open; the
-signature tiers are unaffected). There's nothing to invoke; it runs automatically. A
-silent doctor hook speaks up at `SessionStart` only when a dependency is missing or the
-installed copy lags the marketplace, with the one-liner to fix it.
+BSD grep on large trees) and fall back to `grep` otherwise. There's nothing to invoke;
+it runs automatically. A silent doctor hook speaks up at `SessionStart` only when a
+dependency is missing, the installed copy lags the marketplace, or a recommended
+[companion firewall](#beyond-the-tiers) (Socket Firewall / `vet`) isn't installed — each
+with the one-liner to fix it.
 
 ## How it works
 
@@ -50,20 +50,10 @@ can find something new:
 
 ### Beyond the tiers
 
-Three behaviors backstop the signature tiers — the first two close gaps the tiers can't,
-the third tightens detection latency:
+Two behaviors backstop the signature tiers, and wormhook nudges you toward the install-time
+firewall layer it deliberately doesn't reimplement:
 
-- **Version cooldown (unknown-worm defense, the one network call).** On an `npm`/`pnpm`/
-  `yarn`/`bun` install that **names an explicit package**, wormhook refuses any version
-  **published less than 72h ago** (`WORMHOOK_COOLDOWN_HOURS`, `0` disables). Signature
-  scanning is permanently one campaign behind; a publish-age floor defeats the *whole
-  class* with zero signatures, because the vast majority of worm installs happen in the
-  first days after a poisoned publish — before it's named or yanked. The check is a single
-  metadata `GET` to `registry.npmjs.org` (the same host the install is about to hit for the
-  tarball), made with `curl`, **never `npm`** — a compromised `npm` binary must not sit in
-  the trust path of the check meant to catch it. Bare `npm install`/`npm ci` (lockfile-
-  driven) is skipped; any registry/parse failure fails open to 🟡 and never blocks.
-- **Python execution gating.** `pip`/`pip3`/`pipx`/`uv`/`python`/`python3` now trigger the
+- **Python execution gating.** `pip`/`pip3`/`pipx`/`uv`/`python`/`python3` trigger the
   Tier-0 sweep at `PreToolUse`, so the weaponized `.pth` startup-hook check runs **before**
   the interpreter auto-executes a poisoned site-packages `.pth` (the Hades/Miasma PyPI
   vector) — not just on the next npm/git command. (It gates *execution* to run the existing
@@ -73,6 +63,14 @@ the third tightens detection latency:
   approximation of a continuous filesystem watcher: persistence planted mid-session (a `pip
   install`, an agent file-write) is caught at the next prompt, not the next npm/git command.
   Silent when clean (it would otherwise spam the transcript); speaks only on a finding or 🟡.
+- **Companion-firewall nudge (no network in wormhook itself).** Blocking *malicious or
+  too-new package versions* at the registry boundary needs registry intelligence — exactly
+  what [Socket Firewall](https://docs.socket.dev/docs/socket-firewall) (`sfw`, a live install
+  firewall) and [`safedep/vet`](https://github.com/safedep/vet) (dependency CVE + malicious-
+  package audit) do, and far better than a hook can. Rather than reimplement a thin version
+  of that with its own network calls, wormhook stays **fully local** and the `SessionStart`
+  doctor nudges you (once, silently if present) to install them — "run alongside, not
+  instead." `sfw` is the direct answer to "stop me installing a poisoned version."
 
 ```mermaid
 flowchart TD
@@ -84,7 +82,7 @@ flowchart TD
 
     B --> Bg{matches GATE_RE<br/>or PYGATE_RE?}
     Bg -- no --> ALLOW
-    Bg -- "yes (+ cooldown<br/>on named npm install)" --> T0
+    Bg -- yes --> T0
     C --> Cg{matches INSTALL_RE<br/>or PYINSTALL_RE?}
     Cg -- no --> ALLOW
     Cg -- yes --> T0
@@ -132,7 +130,7 @@ flowchart TD
 
 | Event | When | What |
 |-------|------|------|
-| `PreToolUse` | before an `npm`/`node`/… or `pip`/`uv`/`python` command | Tier 0–1 (+ Tier 2 if deps drifted; + the [version cooldown](#beyond-the-tiers) on a named npm install); **blocks** on a hit (`permissionDecision: "deny"`) |
+| `PreToolUse` | before an `npm`/`node`/… or `pip`/`uv`/`python` command | Tier 0–1 (+ Tier 2 if deps drifted); **blocks** on a hit (`permissionDecision: "deny"`) |
 | `PostToolUse` | after an install-class or `pip`/`uv` install command | re-scan of the freshly written tree (Python installs re-run the Tier-0 `.pth` check); warns on a hit |
 | `PostToolUse` | after a working-tree-rewriting `git` op (`pull`/`merge`/`checkout`/`switch`/`rebase`) | Tier 0–1 on the new tree (+ Tier 2 on dep drift); warns on a hit. Catches persistence/source IOCs that arrive over git with **no npm involved** |
 | `UserPromptSubmit` | every human turn | Tier 0–1 ([continuous monitor](#beyond-the-tiers)); **blocks** on a hit (`decision: "block"`). Silent when clean |
@@ -161,9 +159,6 @@ refreshes the cache), 🚨 findings. Non-gated commands stay silent.
   `/tmp/.sshu-setup.js` SSH propagation. Caught at Tier 0, and `pip`/`uv`/`python` now
   [trigger that scan at `PreToolUse`](#beyond-the-tiers) so it runs **before** the interpreter
   auto-executes a poisoned `.pth` — not just on the next npm/git command.
-- **Unknown worms (no signature)** — the [version cooldown](#beyond-the-tiers) refuses
-  freshly-published npm versions (<72h), closing the highest-risk window before a campaign
-  is named.
 - **Dev-env & CI injection** — rogue `mcpServers`/SessionStart-hook entries, poisoned git
   hooks (`init.templateDir`/`core.hooksPath`), `pull_request_target` workflows calling the
   `ci-quality/code-quality-check` action, `@semantic-release/exec` carrier injection.
@@ -181,15 +176,14 @@ feature — to keep CI false positives at zero.
 
 ## What it deliberately doesn't do
 
-A narrow lock on purpose: each row below needs context this hook lacks, and forcing it in
-would trade away the near-zero false-positive rate that makes the block trustworthy. Run
-the owning layer alongside. (wormhook makes **one** network call — the version cooldown's
-single metadata `GET` to `registry.npmjs.org`, via `curl` not `npm`, on a named npm install;
-it fails open and is disabled by `WORMHOOK_COOLDOWN_HOURS=0`. Everything else is local.)
+A narrow lock on purpose: each row below needs context a synchronous, no-network hook
+lacks, and forcing it in would trade away the near-zero false-positive rate that makes
+the block trustworthy. Run the owning layer alongside — the `SessionStart` doctor nudges
+you to install the install-firewall ones (Socket Firewall, `vet`).
 
 | Check it doesn't do | Layer that owns it |
 |---------------------|--------------------|
-| Package existence / typosquatting / maintainer-change / max-satisfying range resolution (wormhook does only a coarse publish-age **cooldown**, not full registry intelligence) | [`safedep/vet`](https://github.com/safedep/vet), [Socket](https://socket.dev/) |
+| Package existence / typosquatting / version-age / maintainer-change (needs registry lookups) | [Socket Firewall](https://docs.socket.dev/docs/socket-firewall), [`safedep/vet`](https://github.com/safedep/vet) |
 | Known-CVE scanning (needs an advisory feed) | `vet`, `npm audit`, Dependabot |
 | Secret detection | `gitleaks`, `trufflehog` |
 | Generic Actions hardening (unpinned actions, broad perms) | `actionlint`, `zizmor` |
@@ -199,9 +193,8 @@ it fails open and is disabled by `WORMHOOK_COOLDOWN_HOURS=0`. Everything else is
 | Credential-read → exfil (needs taint tracking) | GuardDog (`mode: taint`) |
 | Auditing PyPI **package contents** (wormhook gates `pip`/`uv`/`python` *execution* only — to run the Tier-0 `.pth` check early — it doesn't inspect the installed package tree) | install-time sandbox / `vet` / GuardDog |
 
-The design bet is **independence over coverage**: a fast, near-zero-FP gate at the agent
-boundary that trips on a specific, evidence-backed set of indicators — local except for the
-cooldown's single registry metadata lookup.
+The design bet is **independence over coverage**: a fast, no-network, near-zero-FP gate
+at the agent boundary that trips on a specific, evidence-backed set of indicators.
 
 ## Signatures
 

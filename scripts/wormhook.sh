@@ -4,14 +4,15 @@
 # and UserPromptSubmit (top-level decision:"block"); Session/Post can only warn. See the
 # Alert helper KEY-DECISION for the three distinct emission shapes.
 #
-# Beyond the signature tiers, three behaviors defend the gaps signature scanning can't:
-#   - Version cooldown (Feature 1): a publish-age floor that refuses npm versions <72h old
-#     (env WORMHOOK_COOLDOWN_HOURS, 0 disables) — defeats an UNKNOWN worm with no signature.
-#     The one NETWORK call: a curl (never npm) metadata GET to registry.npmjs.org, PreToolUse
-#     install-class with explicit targets only, --max-time bounded, fail-open-loud.
-#   - Python execution gating (Feature 2): pip/uv/pipx/python on PreToolUse trigger the Tier-0
+# NO NETWORK: every tier is a local filesystem/stat/grep operation. The install-time
+# *firewall* job (registry intelligence: typosquats, malicious-version blocking, age/
+# reputation) is deliberately ceded to Socket Firewall (sfw) + safedep/vet — doctor.sh
+# nudges you to install them. wormhook is the independent, local, near-zero-FP lock.
+#
+# Two behaviors backstop the signature tiers where they're structurally blind:
+#   - Python execution gating: pip/uv/pipx/python on PreToolUse trigger the Tier-0
 #     .pth sweep BEFORE the interpreter auto-executes a poisoned site-packages startup hook.
-#   - UserPromptSubmit monitor (Feature 4): re-runs T0+T1 every human turn and can block —
+#   - UserPromptSubmit monitor: re-runs T0+T1 every human turn and can block —
 #     the hook layer's approximation of a continuous filesystem watcher. Silent when clean.
 #
 # Sources:
@@ -160,25 +161,19 @@ deps_changed() {            # 0 = changed/never-scanned (=> scan); 1 = unchanged
 
 # ── Execution plan from the event ─────────────────────────────────────────────
 MODE=session_start          # alert() blocks only in pre_tool mode
-RUN_T1=0 RUN_T2=0 UPDATE_CACHE=0 RUN_COOLDOWN=0
+RUN_T1=0 RUN_T2=0 UPDATE_CACHE=0
 case "$EVENT" in
   PreToolUse)
     MODE=pre_tool
     if echo "$COMMAND" | grep -qE "$GATE_RE"; then
       RUN_T1=1
-      # install-class: the package.json lifecycle gate (Tier 1) and the version cooldown
-      # are the pre-execution checks that matter; the heavy node_modules walk is the OLD
-      # state, low value — PostToolUse re-scans the fresh tree. exec-class: scan only if
-      # deps drifted. (cooldown_check itself skips bare installs with no named target and
-      # the WORMHOOK_COOLDOWN_HOURS=0 opt-out; it runs after Tier 0, below.)
-      if echo "$COMMAND" | grep -qE "$INSTALL_RE"; then
-        RUN_COOLDOWN=1
-      else
-        deps_changed && { RUN_T2=1; UPDATE_CACHE=1; }
-      fi
+      # install-class: the package.json lifecycle gate (Tier 1) is the pre-execution
+      # check that matters; the heavy node_modules walk is the OLD state, low value —
+      # PostToolUse re-scans the fresh tree. exec-class: scan only if deps drifted.
+      echo "$COMMAND" | grep -qE "$INSTALL_RE" || { deps_changed && { RUN_T2=1; UPDATE_CACHE=1; }; }
     elif echo "$COMMAND" | grep -qE "$PYGATE_RE"; then
       # Python interpreter/installer: Tier 0 (always) is the .pth gate we need pre-exec;
-      # add Tier 1. NEVER Tier 2 (node_modules irrelevant) and NEVER cooldown (npm-only).
+      # add Tier 1. NEVER Tier 2 (node_modules irrelevant).
       RUN_T1=1
     else
       exit 0                                             # not a command we gate
@@ -291,88 +286,6 @@ EOF
   fi
 }
 _in_list() { local n="$1"; shift; local x; for x in "$@"; do [[ "$x" == "$n" ]] && return 0; done; return 1; }
-
-# ── Version cooldown (Feature 1) ────────────────────────────────────────────────
-# Defense against an UNKNOWN worm — no signature required. Refuse an npm package version
-# published less than WORMHOOK_COOLDOWN_HOURS ago (default 72; 0 disables). Most worm installs
-# land in the first days after a poisoned publish, before the campaign is named or the version
-# yanked, so a publish-age floor defeats the whole class. One metadata GET per explicitly-named
-# package to registry.npmjs.org — the SAME host npm is about to fetch the tarball from, so it
-# adds nothing meaningful to install latency. Fetched via curl, NEVER npm: a compromised npm
-# binary must not sit in the trust path of the check meant to catch it.
-# Fail-open-loud: any missing-curl / registry / parse failure => warn() (🟡), NEVER block,
-# NEVER refresh cache. Only fires PreToolUse, install-class, with explicit package targets
-# (RUN_COOLDOWN gate in the dispatch case). Invoked AFTER Tier 0 so a persistence finding
-# (machine already infected) outranks "package too new" in pre_tool's first-alert-wins model.
-COOLDOWN_HOURS="${WORMHOOK_COOLDOWN_HOURS:-72}"
-_iso_to_epoch() {  # npm .time ISO-8601 (2021-04-15T08:00:00.123Z) -> epoch; "" on failure
-  local iso="$1" e
-  e=$(date -u -d "$iso" +%s 2>/dev/null) && { printf '%s' "$e"; return 0; }    # GNU
-  date -j -u -f "%Y-%m-%dT%H:%M:%S" "${iso%.*}" +%s 2>/dev/null                # BSD/macOS (drop .frac+Z)
-}
-cooldown_check() {
-  [[ "$COOLDOWN_HOURS" =~ ^[0-9]+$ ]] || return 0        # malformed threshold => treat as disabled
-  [[ "$COOLDOWN_HOURS" -eq 0 ]] && return 0              # explicit opt-out
-  command -v curl &>/dev/null || { warn "version cooldown unavailable (curl missing)"; return 0; }
-
-  local now threshold past_verb=0 tok name spec rest ver meta pub pub_epoch age age_h range_note urlname
-  now=$(date -u +%s); threshold=$(( COOLDOWN_HOURS * 3600 ))
-  # Word-split the command into argv to walk its tokens (intentional; not file globbing).
-  # shellcheck disable=SC2086
-  set -- $COMMAND
-  for tok in "$@"; do
-    if [[ $past_verb == 0 ]]; then                       # advance past the install verb
-      case "$tok" in install|i|add|ci) past_verb=1 ;; esac
-      continue
-    fi
-    [[ "$tok" == -* ]] && continue                       # flag, not a package
-    case "$tok" in *://*|*.tgz|*.tar.gz|./*|/*) continue ;; esac  # url/tarball/path, not a registry name
-    # Split name@spec, honoring a leading @scope/ (the first @ is the scope, not a version).
-    if [[ "$tok" == @* ]]; then
-      rest="${tok#@}"; name="@${rest%%@*}"               # @scope/pkg
-      spec="${rest#*@}"; [[ "$spec" == "$rest" ]] && spec=""
-    else
-      name="${tok%%@*}"                                  # pkg
-      spec="${tok#*@}"; [[ "$spec" == "$tok" ]] && spec=""
-    fi
-    [[ -z "$name" ]] && continue
-    range_note=""
-    urlname="${name/\//%2f}"                             # scoped @scope/pkg -> @scope%2fpkg (no-op if unscoped)
-    meta=$(curl -fsS --max-time 5 "https://registry.npmjs.org/${urlname}" 2>/dev/null) \
-      || { warn "version cooldown unavailable ($name: registry fetch failed)"; continue; }
-    # Resolve which published version to age-check.
-    if [[ -z "$spec" || "$spec" == "latest" ]]; then
-      ver=$(jq -r '.["dist-tags"].latest // empty' <<<"$meta" 2>/dev/null)
-    elif [[ "$spec" =~ ^[0-9] ]]; then
-      ver="$spec"                                        # exact version
-    else
-      ver=$(jq -r '.["dist-tags"].latest // empty' <<<"$meta" 2>/dev/null)  # range: MVP checks latest
-      range_note=" (range '$spec' not resolved; checked latest '$ver')"
-    fi
-    [[ -z "$ver" ]] && { warn "version cooldown unavailable ($name: no version resolved)"; continue; }
-    pub=$(jq -r --arg v "$ver" '.time[$v] // empty' <<<"$meta" 2>/dev/null)
-    [[ -z "$pub" ]] && { warn "version cooldown unavailable ($name@$ver: no publish time in registry)"; continue; }
-    pub_epoch=$(_iso_to_epoch "$pub")
-    [[ -z "$pub_epoch" ]] && { warn "version cooldown unavailable ($name@$ver: unparseable publish date)"; continue; }
-    age=$(( now - pub_epoch )); age_h=$(( age / 3600 ))
-    [[ "$age" -lt "$threshold" ]] || continue            # aged past the floor => fine
-    alert "PACKAGE TOO NEW (cooldown)" "$(cat <<BODY
-$name@$ver was published ${age_h}h ago — under the ${COOLDOWN_HOURS}h publish-age cooldown${range_note}.
-${COMMAND:+Command blocked: $COMMAND}
-
-A version this fresh is the highest-risk window for an UNKNOWN supply-chain worm: most
-malicious installs happen in the first days after a poisoned publish, before the campaign
-is named or the version is yanked. wormhook refuses it until it has aged past the threshold —
-no signature required.
-
-If you trust this version (e.g. you just published it, or it has been independently vetted):
-  1. Disable the cooldown for this command:  WORMHOOK_COOLDOWN_HOURS=0 <your command>
-  2. Or lower the threshold:                 WORMHOOK_COOLDOWN_HOURS=<hours> <your command>
-  3. Or pin a known-good older version that has already aged past ${COOLDOWN_HOURS}h.
-BODY
-)"
-  done
-}
 
 # ══ TIER 0: persistence + agent-hook injection — cheap stats, ALWAYS, NEVER cached ══
 
@@ -582,10 +495,6 @@ BODY
 )"
   done
 fi
-
-# Version cooldown: runs AFTER Tier 0 so an active-infection finding blocks first (pre_tool
-# is first-alert-wins). RUN_COOLDOWN is set only for PreToolUse install-class commands.
-[[ "$RUN_COOLDOWN" == 1 ]] && cooldown_check
 
 # ══ TIER 1: project source + package.json lifecycle — cheap (~26ms), every event ══
 if [[ "$RUN_T1" == 1 ]]; then

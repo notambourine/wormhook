@@ -66,8 +66,15 @@ NODE_MODULES="${CWD}/node_modules"
 
 # Command classes. GATE = the npm/node commands we care about at all; INSTALL = the
 # subset that mutates node_modules (the only thing that can introduce a new dep IOC).
+# Keep these in sync with the `if` globs in hooks/hooks.json (`if` ⊇ regex) — see the
+# "Two sources of truth" note in CLAUDE.md.
 GATE_RE='^\s*(npm (ci|install|i|add|run|test|exec)|pnpm (install|i|add|run|exec|dlx)|yarn( (install|add|run))?|bun (install|add|i|run|x)|npx|node)(\s|$)'
 INSTALL_RE='^\s*(npm (ci|install|i|add)|pnpm (install|i|add)|yarn( (install|add))?|bun (install|add|i))(\s|$)'
+# GIT = working-tree-rewriting git ops. pull/merge/checkout/switch/rebase land new
+# source — including .pth/.claude persistence and package.json lifecycle scripts —
+# with no npm involved, so they need a Tier 0+1 sweep too. PostToolUse only: pre-op
+# the new files don't exist yet (see the case below). Tolerate a leading `-C <dir>`.
+GIT_RE='^\s*git\s+(-C\s+\S+\s+)?(pull|merge|checkout|switch|rebase)(\s|$)'
 
 # ── Fast content greps: ripgrep when available ────────────────────────────────
 # KEY-DECISION 2026-06-06: the two content scans (Tier 1 project source, Tier 2
@@ -147,8 +154,17 @@ case "$EVENT" in
     ;;
   PostToolUse)
     MODE=post_tool
-    echo "$COMMAND" | grep -qE "$INSTALL_RE" || exit 0  # only care right after an install
-    RUN_T1=1; RUN_T2=1; UPDATE_CACHE=1                  # fresh deps => full scan + refresh
+    if echo "$COMMAND" | grep -qE "$INSTALL_RE"; then
+      RUN_T1=1; RUN_T2=1; UPDATE_CACHE=1                # fresh deps => full scan + refresh
+    elif echo "$COMMAND" | grep -qE "$GIT_RE"; then
+      # git just rewrote the working tree: new source + lifecycle scripts + .pth/.claude
+      # persistence can all arrive with no install. Tier 0 always runs; add Tier 1, and
+      # Tier 2 only if the dep fingerprint drifted (e.g. the pull moved package-lock.json).
+      RUN_T1=1
+      deps_changed && { RUN_T2=1; UPDATE_CACHE=1; }
+    else
+      exit 0                                             # neither install- nor git-class
+    fi
     ;;
   *)  # SessionStart (or unknown): cheap tiers always; heavy tier only on cache miss
     MODE=session_start; RUN_T1=1

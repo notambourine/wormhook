@@ -24,6 +24,13 @@
             "if": "Bash(npm *)|Bash(pnpm *)|Bash(yarn *)|Bash(bun *)",
             "timeout": 300,
             "statusMessage": "wormhook: post-install supply-chain scan..."
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/wormhook.sh\"",
+            "if": "Bash(git pull*)|Bash(git merge*)|Bash(git checkout*)|Bash(git switch*)|Bash(git rebase*)",
+            "timeout": 300,
+            "statusMessage": "wormhook: post-checkout supply-chain scan..."
           }
         ]
       }

@@ -10,7 +10,7 @@
     {
       "name": "wormhook",
       "source": "./",
-      "description": "npm/node supply-chain malware scanner for Claude Code. Tiered hook detecting Shai-Hulud (1.0-3.0 + Mini), Axios/DPRK RAT, SANDWORM_MODE, the Hades/PyPI .pth startup-hook wave, and remote-eval loaders via filename, SHA256, and behavioral IOCs."
+      "description": "npm/node supply-chain malware scanner for Claude Code. Tiered hook detecting Shai-Hulud (1.0-3.0 + Mini), Axios/DPRK RAT, SANDWORM_MODE, the Hades/PyPI .pth startup-hook wave, and remote-eval loaders via filename, SHA256, and behavioral IOCs. Adds an unknown-worm publish-age cooldown, Python (pip/uv) execution gating, and a UserPromptSubmit continuous monitor."
     }
   ]
 }

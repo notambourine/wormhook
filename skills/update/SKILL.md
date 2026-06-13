@@ -86,9 +86,10 @@ traces to a real advisory):
 A behavioral change (anything touching the scripts) **must**:
 
 - bump `version` in `.claude-plugin/plugin.json` (a CI tripwire fails the PR otherwise)
-- if the `description` changed, mirror it **byte-for-byte** into
-  `.claude-plugin/marketplace.json` (`.plugins[] | select(.name=="wormhook").description`) —
-  a CI parity check fails on drift
+- if the new campaign should appear in the **full** install/inspect description, update
+  `.claude-plugin/plugin.json`'s `description`. The marketplace **tagline**
+  (`.claude-plugin/marketplace.json`) is short and role-distinct — only touch it if the
+  one-line pitch genuinely changed. The two are **not** kept in sync; there is no parity check.
 
 ## 6. Verify the change
 
@@ -97,10 +98,6 @@ A behavioral change (anything touching the scripts) **must**:
 for f in scripts/*.sh; do /bin/bash -n "$f"; done
 shellcheck -S warning scripts/*.sh
 jq -e . hooks/hooks.json .claude-plugin/*.json >/dev/null
-
-# Description parity
-diff <(jq -r .description .claude-plugin/plugin.json) \
-     <(jq -r '.plugins[]|select(.name=="wormhook").description' .claude-plugin/marketplace.json)
 ```
 
 Then **smoke-test each new detection** with a synthetic payload in an isolated temp `HOME`/`CWD`

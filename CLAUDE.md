@@ -21,9 +21,12 @@ that aren't obvious from the code.
 - **Behavior PRs must bump `.claude-plugin/plugin.json`.** A CI tripwire fails the PR if
   the version doesn't move forward on a behavioral change. README/comment-only changes
   don't need it; anything touching the scripts does.
-- **`plugin.json` and `marketplace.json` descriptions must match byte-for-byte.** A separate
-  CI check (`Check description parity`) fails the PR on drift. If you edit one `description`,
-  edit the other — `.claude-plugin/marketplace.json`'s `.plugins[] | select(.name=="wormhook")`.
+- **The two `description` fields serve different roles — keep them different, do not sync them.**
+  `marketplace.json`'s is a short browse-list **tagline** (one line, what+why); `plugin.json`'s is
+  the **full** install/inspect description (the campaign + IOC detail). The plugin platform has no
+  shared-field / `$ref` mechanism, so a byte-identical copy is just drift waiting to happen — we
+  deliberately gave each a distinct job instead, and there is **no parity check**. Edit whichever
+  fits the surface; do not mirror one into the other.
 - **`doctor.sh` stays `jq`-free.** It's the watchdog for the case where `wormhook.sh`
   can't run (missing `jq`), so it depends on nothing but bash. Its JSON is hand-rolled
   and safe *only because every string is static* — don't interpolate dynamic content

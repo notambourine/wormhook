@@ -1,9 +1,9 @@
 # wormhook — operating context for Claude
 
 A Claude Code plugin: a tiered shell hook that scans for npm/node (and landed PyPI)
-supply-chain malware and blocks at `PreToolUse`. User-facing docs are in `README.md`;
-this file is the maintainer/agent context — the invariants and gotchas that aren't
-obvious from the code.
+supply-chain malware and blocks at `PreToolUse` and `UserPromptSubmit`. User-facing docs
+are in `README.md`; this file is the maintainer/agent context — the invariants and gotchas
+that aren't obvious from the code.
 
 ## Layout
 
@@ -12,7 +12,8 @@ obvious from the code.
 - `scripts/malware-patterns.sh` — **single source of truth** for signatures, sourced by
   the hook. Add a campaign here once and every tier picks it up. Extended-regex only
   (must parse identically under bash and zsh).
-- `scripts/doctor.sh` — silent-unless-degraded SessionStart health check (deps + version drift).
+- `scripts/doctor.sh` — silent-unless-degraded SessionStart health check (wormhook deps +
+  version drift + a nudge to install the ceded install-firewall layer: Socket Firewall, `vet`).
 - `hooks/hooks.json` — event → script wiring. `.claude-plugin/{plugin,marketplace}.json` — manifests.
 
 ## Invariants (don't break these)
@@ -20,6 +21,9 @@ obvious from the code.
 - **Behavior PRs must bump `.claude-plugin/plugin.json`.** A CI tripwire fails the PR if
   the version doesn't move forward on a behavioral change. README/comment-only changes
   don't need it; anything touching the scripts does.
+- **`plugin.json` and `marketplace.json` descriptions must match byte-for-byte.** A separate
+  CI check (`Check description parity`) fails the PR on drift. If you edit one `description`,
+  edit the other — `.claude-plugin/marketplace.json`'s `.plugins[] | select(.name=="wormhook")`.
 - **`doctor.sh` stays `jq`-free.** It's the watchdog for the case where `wormhook.sh`
   can't run (missing `jq`), so it depends on nothing but bash. Its JSON is hand-rolled
   and safe *only because every string is static* — don't interpolate dynamic content
@@ -35,17 +39,41 @@ obvious from the code.
 - **Signatures only get a block-tier home if they're near-zero-FP.** Higher-FP behavioral
   patterns are scoped to the `node_modules` tier (third-party deps); see README's
   "deliberately doesn't do" for what's held back and why. The line is FP-safety, not effort.
+- **No network calls — ever.** Every tier is local (stat/grep/jq over the filesystem). The
+  install-time registry-firewall job (malicious-version blocking, typosquats, publish-age/
+  reputation) is **ceded to Socket Firewall (`sfw`) + `safedep/vet`**; `doctor.sh` nudges the
+  user to install them. If you're tempted to add a registry lookup (e.g. a publish-age
+  "cooldown"), that belongs in `sfw`/`vet`, not here — independence and zero-network are the
+  design bet, and a hook can't transparently route an install through a firewall anyway (it
+  can only allow/deny). See README "deliberately doesn't do".
 
 ## Dispatch model
 
 `wormhook.sh` decides *which tiers run* and *whether it can block* from two inputs:
 `EVENT` (`hook_event_name`) and the command, matched against `GATE_RE` / `INSTALL_RE` /
-`GIT_RE`. The scan engine itself is **CWD-driven** — it scans `$CWD` and `~/.claude`
-regardless of the command. Only `PreToolUse` can hard-block (`permissionDecision:
-"deny"`); `SessionStart`/`PostToolUse` run after the point of no return and can only warn.
+`GIT_RE` / `PYGATE_RE` / `PYINSTALL_RE`. The scan engine itself is **CWD-driven** — it scans
+`$CWD` and `~/.claude` regardless of the command. **Two events can hard-block:** `PreToolUse`
+(`hookSpecificOutput.permissionDecision:"deny"`) and `UserPromptSubmit` (**top-level**
+`decision:"block"`). `SessionStart`/`PostToolUse` run after the point of no return and only warn.
 
 - `GIT_RE` (pull/merge/checkout/switch/rebase) is **PostToolUse-only** — pre-op the new
   files don't exist yet, so a pre-scan is pure cost.
+- `PYGATE_RE` (pip/pip3/pipx/uv/python/python3) is **PreToolUse** → T0+T1 only. The point is
+  to run the Tier-0 `.pth` sweep *before* the interpreter auto-executes a poisoned
+  site-packages startup hook. **Never T2** (node_modules irrelevant). `PYINSTALL_RE` is the PostToolUse
+  subset (a fresh `.pth` can land) → T0+T1 re-scan. `make`/`./` are deliberately *not* gated:
+  too broad, no matching signatures, pure FP/latency tax — gate only where coverage exists.
+- `UserPromptSubmit` is the **continuous monitor**: T0+T1 only (the fast-changing tiers),
+  **never T2**, fires every human turn, and *can block*. It carries no command (`COMMAND=""`),
+  so the `${COMMAND:+…}` alert interpolations omit cleanly. It is **silent-on-clean** — the
+  always-on 🟢 status line is suppressed for `MODE=prompt_submit` (a 🟢 every prompt spams the
+  transcript); it speaks only on a finding (🚨 block) or degradation (🟡). The 🟡 path is NOT
+  suppressed — a silently-degraded continuous monitor is the invisibility bug all over again.
+- **`alert()` emits three non-interchangeable shapes** keyed on `MODE`: `pre_tool` nests
+  `permissionDecision`/`permissionDecisionReason` under `hookSpecificOutput`; `prompt_submit`
+  uses **top-level** `decision:"block"` + `reason` (model) + `systemMessage` (user) — on UPS
+  `decision` is **mutually exclusive** with `hookSpecificOutput.additionalContext`, so neither
+  is emitted; `session_start`/`post_tool` accumulate and emit `systemMessage` + `additionalContext`.
 
 ### Two sources of truth — keep them in sync (`if` ⊇ regex)
 
@@ -59,9 +87,20 @@ skipped with no signal. JSON can't hold a comment, so the canonical statement li
 the regex block in `wormhook.sh`; this is the mirror. (Don't drop the `if` to "DRY" it to
 one source — that spawns the script on every command; the latency tax isn't worth it.)
 
+**`UserPromptSubmit` is exempt** from `if ⊇ regex`: a UPS payload carries no command, so its
+`hooks.json` entry has **no `if` and no matcher** — it fires every prompt by design, and the
+script gates it purely on `EVENT`. There's no command-class regex to keep it in sync with.
+
 ## Working here
 
-- After editing scripts: `bash -n scripts/*.sh` and `shellcheck -S warning scripts/*.sh`.
+- After editing scripts: syntax-check with the **real shebang shell** (Apple `/bin/bash` is
+  3.2.57), and lint. `bash -n` only parses its **first** file arg — loop, don't glob:
+  `for f in scripts/*.sh; do /bin/bash -n "$f"; done` then `shellcheck -S warning scripts/*.sh`.
+  (A Homebrew bash on `$PATH` will pass files that 3.2 rejects — always check with `/bin/bash`.)
+- **bash 3.2 gotcha in `$(…)`:** its command-substitution parser miscounts a lone `'`
+  (apostrophe) even inside a heredoc body, swallowing the closing `)`. So **no contractions**
+  ("it's", "don't") in any `alert "..." "$(cat <<BODY … BODY)"` body — write "it has"/"do not".
+  `bash -n` under a newer bash won't catch it; only `/bin/bash` will.
 - After editing `hooks.json`/manifests: `jq -e . hooks/hooks.json .claude-plugin/*.json`.
 - Smoke-test a path by piping a synthetic payload:
   `echo '{"tool_input":{"command":"git pull"},"cwd":"/tmp/x","hook_event_name":"PostToolUse"}' | bash scripts/wormhook.sh`

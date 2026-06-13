@@ -1,7 +1,19 @@
 #!/bin/bash
-# Tiered supply-chain malware scan. Runs on SessionStart, PreToolUse, PostToolUse.
-# PreToolUse blocks via permissionDecision:"deny" + a user-facing systemMessage
-# (PreToolUse only — Post/Session can't unblock); see the Alert helper KEY-DECISION.
+# Tiered supply-chain malware scan. Runs on SessionStart, PreToolUse, PostToolUse,
+# UserPromptSubmit. Two events can hard-block: PreToolUse (permissionDecision:"deny")
+# and UserPromptSubmit (top-level decision:"block"); Session/Post can only warn. See the
+# Alert helper KEY-DECISION for the three distinct emission shapes.
+#
+# NO NETWORK: every tier is a local filesystem/stat/grep operation. The install-time
+# *firewall* job (registry intelligence: typosquats, malicious-version blocking, age/
+# reputation) is deliberately ceded to Socket Firewall (sfw) + safedep/vet — doctor.sh
+# nudges you to install them. wormhook is the independent, local, near-zero-FP lock.
+#
+# Two behaviors backstop the signature tiers where they're structurally blind:
+#   - Python execution gating: pip/uv/pipx/python on PreToolUse trigger the Tier-0
+#     .pth sweep BEFORE the interpreter auto-executes a poisoned site-packages startup hook.
+#   - UserPromptSubmit monitor: re-runs T0+T1 every human turn and can block —
+#     the hook layer's approximation of a continuous filesystem watcher. Silent when clean.
 #
 # Sources:
 #   - Shai-Hulud 1.0 (Sep 2025): global['!']=X-YYYY fingerprint, crypto drainer
@@ -75,6 +87,14 @@ INSTALL_RE='^\s*(npm (ci|install|i|add)|pnpm (install|i|add)|yarn( (install|add)
 # with no npm involved, so they need a Tier 0+1 sweep too. PostToolUse only: pre-op
 # the new files don't exist yet (see the case below). Tolerate a leading `-C <dir>`.
 GIT_RE='^\s*git\s+(-C\s+\S+\s+)?(pull|merge|checkout|switch|rebase)(\s|$)'
+# PYGATE = Python interpreters/installers. They don't touch node_modules, but Python
+# AUTO-EXECUTES a site-packages *.pth on every interpreter start (the Hades/Miasma PyPI
+# vector) — so any of these must trigger a PreToolUse Tier-0 sweep so the .pth check runs
+# BEFORE the interpreter loads it. PYINSTALL = the subset that mutates site-packages (a
+# fresh .pth can land), warranting a PostToolUse re-scan. `make`/`./` deliberately NOT
+# gated: too broad, no matching signatures, pure FP/latency tax. Keep `if` ⊇ regex.
+PYGATE_RE='^\s*(pip|pip3|pipx|uv|python|python3)(\s|$)'
+PYINSTALL_RE='^\s*((pip|pip3|pipx)\s+install|uv\s+(add|sync|(pip\s+install)))(\s|$)'
 
 # ── Fast content greps: ripgrep when available ────────────────────────────────
 # KEY-DECISION 2026-06-06: the two content scans (Tier 1 project source, Tier 2
@@ -145,12 +165,19 @@ RUN_T1=0 RUN_T2=0 UPDATE_CACHE=0
 case "$EVENT" in
   PreToolUse)
     MODE=pre_tool
-    echo "$COMMAND" | grep -qE "$GATE_RE" || exit 0   # not a command we gate
-    RUN_T1=1
-    # install-class: the package.json lifecycle gate (Tier 1) is the pre-execution
-    # check that matters; the heavy node_modules walk is the OLD state, low value —
-    # PostToolUse re-scans the fresh tree. exec-class: scan only if deps drifted.
-    echo "$COMMAND" | grep -qE "$INSTALL_RE" || { deps_changed && { RUN_T2=1; UPDATE_CACHE=1; }; }
+    if echo "$COMMAND" | grep -qE "$GATE_RE"; then
+      RUN_T1=1
+      # install-class: the package.json lifecycle gate (Tier 1) is the pre-execution
+      # check that matters; the heavy node_modules walk is the OLD state, low value —
+      # PostToolUse re-scans the fresh tree. exec-class: scan only if deps drifted.
+      echo "$COMMAND" | grep -qE "$INSTALL_RE" || { deps_changed && { RUN_T2=1; UPDATE_CACHE=1; }; }
+    elif echo "$COMMAND" | grep -qE "$PYGATE_RE"; then
+      # Python interpreter/installer: Tier 0 (always) is the .pth gate we need pre-exec;
+      # add Tier 1. NEVER Tier 2 (node_modules irrelevant).
+      RUN_T1=1
+    else
+      exit 0                                             # not a command we gate
+    fi
     ;;
   PostToolUse)
     MODE=post_tool
@@ -162,9 +189,20 @@ case "$EVENT" in
       # Tier 2 only if the dep fingerprint drifted (e.g. the pull moved package-lock.json).
       RUN_T1=1
       deps_changed && { RUN_T2=1; UPDATE_CACHE=1; }
+    elif echo "$COMMAND" | grep -qE "$PYINSTALL_RE"; then
+      # pip/uv install just landed: a malicious *.pth can be freshly written into
+      # site-packages. Re-run Tier 0 (the .pth gate) + Tier 1; node_modules is untouched.
+      RUN_T1=1
     else
-      exit 0                                             # neither install- nor git-class
+      exit 0                                             # not install-, git-, nor pyinstall-class
     fi
+    ;;
+  UserPromptSubmit)
+    # Continuous monitor: re-run the cheap, fast-changing tiers at every human turn and —
+    # unlike SessionStart — BLOCK on a finding. T0 (always) + T1 only; NEVER T2 (node_modules
+    # changes only on install, already gated) keeps this ~26ms/turn. No command on a UPS
+    # payload => COMMAND="" => the ${COMMAND:+…} alert interpolations omit cleanly.
+    MODE=prompt_submit; RUN_T1=1; RUN_T2=0
     ;;
   *)  # SessionStart (or unknown): cheap tiers always; heavy tier only on cache miss
     MODE=session_start; RUN_T1=1
@@ -173,10 +211,14 @@ case "$EVENT" in
 esac
 
 # ── Alert helper ──────────────────────────────────────────────────────────────
-# Two delivery channels, by event (see KEY-DECISION below):
-#   PreToolUse:               permissionDecision:"deny" (hard block) + `systemMessage`
-#                             (loud, shown to the USER at block time) + `permissionDecisionReason`
-#                             (instructs the model) — all three in one exit-0 JSON emission.
+# THREE delivery shapes, by event (see KEY-DECISION below). The block-event schemas are
+# NOT interchangeable — PreToolUse nests its decision; UserPromptSubmit puts it top-level:
+#   PreToolUse:               hookSpecificOutput.permissionDecision:"deny" (hard block) +
+#                             `systemMessage` (loud, shown to the USER at block time) +
+#                             permissionDecisionReason (instructs the model) — one exit-0 JSON.
+#   UserPromptSubmit:         top-level decision:"block" (hard block) + `systemMessage` (USER) +
+#                             `reason` (model). decision is MUTUALLY EXCLUSIVE with
+#                             hookSpecificOutput.additionalContext on UPS, so neither is emitted.
 #   SessionStart/PostToolUse: accumulate, then emit `systemMessage` (loud, shown to
 #                             the USER) + `additionalContext` (instructs the model).
 # KEY-DECISION 2026-06-01: SessionStart CANNOT abort the session — Claude Code has no
@@ -227,6 +269,18 @@ EOF
         permissionDecision: "deny",
         permissionDecisionReason: ("[wormhook] Blocked install/run: " + $title + ". State this block to the user plainly and do NOT attempt to work around it or re-run the command until the user confirms the machine is clean.\n" + $body)
       }
+    }'
+    exit 0
+  elif [[ "$MODE" == "prompt_submit" ]]; then
+    # UserPromptSubmit hard block. The UPS schema differs from PreToolUse: the decision is
+    # a TOP-LEVEL "block" (not nested permissionDecision), and `decision` is MUTUALLY
+    # EXCLUSIVE with hookSpecificOutput.additionalContext — so we emit neither additionalContext
+    # nor hookSpecificOutput. `reason` reaches the MODEL (refuse-to-proceed); `systemMessage`
+    # reaches the USER (the 🚨). One exit-0 emission. (Verified against code.claude.com/docs/en/hooks.)
+    jq -n --arg title "$1" --arg body "$2" '{
+      decision: "block",
+      reason: ("[wormhook] Blocked this turn: " + $title + ". State this block to the user plainly and do NOT proceed or work around it until the user confirms the machine is clean.\n" + $body),
+      systemMessage: ("🚨 wormhook BLOCKED this turn — supply-chain IOC detected:\n" + $title + "\n\n" + $body)
     }'
     exit 0
   fi
@@ -715,8 +769,13 @@ if [[ -z "$ALERTS" ]]; then
     SCOPE+=" + node_modules (cached, deps unchanged)"
   fi
   if [[ -n "$WARNINGS" ]]; then
+    # A degraded pass speaks on EVERY event, including prompt_submit — a silently degraded
+    # continuous monitor is the invisibility bug all over again.
     jq -nc --arg msg "🟡 [wormhook] passed with caveats ($SCOPE) — $WARNINGS" '{systemMessage: $msg}'
-  else
+  elif [[ "$MODE" != "prompt_submit" ]]; then
+    # Clean 🟢 is suppressed for prompt_submit ONLY: it fires every human turn, so a 🟢 each
+    # time would spam the transcript. Like doctor.sh, the continuous monitor stays silent when
+    # healthy and speaks only on a finding (🚨 block above) or degradation (🟡 above).
     jq -nc --arg msg "🟢 [wormhook] clean ($SCOPE)" '{systemMessage: $msg}'
   fi
 fi

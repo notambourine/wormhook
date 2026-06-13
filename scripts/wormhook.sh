@@ -66,6 +66,15 @@ NODE_MODULES="${CWD}/node_modules"
 
 # Command classes. GATE = the npm/node commands we care about at all; INSTALL = the
 # subset that mutates node_modules (the only thing that can introduce a new dep IOC).
+#
+# INVARIANT — keep in sync with the `if` globs in hooks/hooks.json. Those globs are a
+# COARSE pre-filter (they exist only to avoid spawning this script on every `ls`/`git
+# status`); these regexes are the PRECISE gate. The `if` set must stay a SUPERSET of
+# what these match: `if` broader than the regex is free (a wasted spawn that exits 0),
+# but `if` NARROWER means the hook silently never fires and the scan is skipped with no
+# signal. So: add a verb to a regex here → add it to the matching `if` there too. JSON
+# can't hold a comment, so this note is the canonical home; the CLAUDE.md checklist
+# mirrors it. (PreToolUse `if` ⊇ GATE_RE; PostToolUse `if` ⊇ INSTALL_RE ∪ GIT_RE.)
 GATE_RE='^\s*(npm (ci|install|i|add|run|test|exec)|pnpm (install|i|add|run|exec|dlx)|yarn( (install|add|run))?|bun (install|add|i|run|x)|npx|node)(\s|$)'
 INSTALL_RE='^\s*(npm (ci|install|i|add)|pnpm (install|i|add)|yarn( (install|add))?|bun (install|add|i))(\s|$)'
 # GIT = working-tree-rewriting git ops. pull/merge/checkout/switch/rebase land new

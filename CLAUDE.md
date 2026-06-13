@@ -45,8 +45,19 @@ regardless of the command. Only `PreToolUse` can hard-block (`permissionDecision
 "deny"`); `SessionStart`/`PostToolUse` run after the point of no return and can only warn.
 
 - `GIT_RE` (pull/merge/checkout/switch/rebase) is **PostToolUse-only** — pre-op the new
-  files don't exist yet, so a pre-scan is pure cost. The `hooks.json` `if` glob is a loose
-  pre-filter (avoids spawning bash on every `git status`); `GIT_RE` is the tight gate.
+  files don't exist yet, so a pre-scan is pure cost.
+
+### Two sources of truth — keep them in sync (`if` ⊇ regex)
+
+"Which commands trigger a scan" is encoded twice: the `if` globs in `hooks/hooks.json`
+and the `GATE_RE`/`INSTALL_RE`/`GIT_RE` regexes in `wormhook.sh`. They're **not**
+duplicates — the `if` glob is a *coarse perf pre-filter* (its only job is to not spawn
+bash on every `ls`/`git status`), and the regex is the *precise gate*. The invariant is
+**`if` ⊇ regex**, not equality: `if` broader than the regex is free (a wasted spawn that
+exits 0); `if` **narrower** is the bug — the hook silently never fires and the scan is
+skipped with no signal. JSON can't hold a comment, so the canonical statement lives at
+the regex block in `wormhook.sh`; this is the mirror. (Don't drop the `if` to "DRY" it to
+one source — that spawns the script on every command; the latency tax isn't worth it.)
 
 ## Working here
 
@@ -56,3 +67,5 @@ regardless of the command. Only `PreToolUse` can hard-block (`permissionDecision
   `echo '{"tool_input":{"command":"git pull"},"cwd":"/tmp/x","hook_event_name":"PostToolUse"}' | bash scripts/wormhook.sh`
 - New campaign → add patterns to `malware-patterns.sh`, update the provenance header in
   `wormhook.sh`, add the Source to `README.md`, bump `plugin.json`.
+- New **command class** (a new gated verb) → update **both** the regex in `wormhook.sh`
+  *and* the matching `if` glob in `hooks/hooks.json`, keeping `if` ⊇ regex (see above).

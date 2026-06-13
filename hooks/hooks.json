@@ -7,7 +7,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/wormhook.sh\"",
-            "if": "Bash(npm *)|Bash(npx *)|Bash(pnpm *)|Bash(yarn *)|Bash(bun *)|Bash(node *)",
+            "if": "Bash(npm *)|Bash(npx *)|Bash(pnpm *)|Bash(yarn *)|Bash(bun *)|Bash(node *)|Bash(pip *)|Bash(pip3 *)|Bash(pipx *)|Bash(uv *)|Bash(python *)|Bash(python3 *)",
             "timeout": 300,
             "statusMessage": "wormhook: scanning for supply-chain malware..."
           }
@@ -31,6 +31,25 @@
             "if": "Bash(git pull*)|Bash(git merge*)|Bash(git checkout*)|Bash(git switch*)|Bash(git rebase*)",
             "timeout": 300,
             "statusMessage": "wormhook: post-checkout supply-chain scan..."
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/wormhook.sh\"",
+            "if": "Bash(pip *)|Bash(pip3 *)|Bash(pipx *)|Bash(uv *)",
+            "timeout": 300,
+            "statusMessage": "wormhook: post-install .pth startup-hook scan..."
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/wormhook.sh\"",
+            "timeout": 15,
+            "statusMessage": "wormhook: continuous supply-chain monitor..."
           }
         ]
       }

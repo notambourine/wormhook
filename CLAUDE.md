@@ -1,9 +1,9 @@
 # wormhook — operating context for Claude
 
 A Claude Code plugin: a tiered shell hook that scans for npm/node (and landed PyPI)
-supply-chain malware and blocks at `PreToolUse`. User-facing docs are in `README.md`;
-this file is the maintainer/agent context — the invariants and gotchas that aren't
-obvious from the code.
+supply-chain malware and blocks at `PreToolUse` and `UserPromptSubmit`. User-facing docs
+are in `README.md`; this file is the maintainer/agent context — the invariants and gotchas
+that aren't obvious from the code.
 
 ## Layout
 
@@ -35,17 +35,41 @@ obvious from the code.
 - **Signatures only get a block-tier home if they're near-zero-FP.** Higher-FP behavioral
   patterns are scoped to the `node_modules` tier (third-party deps); see README's
   "deliberately doesn't do" for what's held back and why. The line is FP-safety, not effort.
+- **The cooldown is the *only* network call.** `cooldown_check` (the unknown-worm publish-age
+  gate) does one metadata `GET` to `registry.npmjs.org` via **`curl`, never `npm`** (a
+  compromised `npm` binary must not be in the trust path), `--max-time`-bounded, fail-open-loud
+  (`warn()` → 🟡, never block, never cache), `WORMHOOK_COOLDOWN_HOURS=0` opt-out. It fires
+  **only** on `PreToolUse` install-class with an explicit named package target. Don't add
+  network calls anywhere else, and don't route this one through `npm`.
 
 ## Dispatch model
 
 `wormhook.sh` decides *which tiers run* and *whether it can block* from two inputs:
 `EVENT` (`hook_event_name`) and the command, matched against `GATE_RE` / `INSTALL_RE` /
-`GIT_RE`. The scan engine itself is **CWD-driven** — it scans `$CWD` and `~/.claude`
-regardless of the command. Only `PreToolUse` can hard-block (`permissionDecision:
-"deny"`); `SessionStart`/`PostToolUse` run after the point of no return and can only warn.
+`GIT_RE` / `PYGATE_RE` / `PYINSTALL_RE`. The scan engine itself is **CWD-driven** — it scans
+`$CWD` and `~/.claude` regardless of the command. **Two events can hard-block:** `PreToolUse`
+(`hookSpecificOutput.permissionDecision:"deny"`) and `UserPromptSubmit` (**top-level**
+`decision:"block"`). `SessionStart`/`PostToolUse` run after the point of no return and only warn.
 
 - `GIT_RE` (pull/merge/checkout/switch/rebase) is **PostToolUse-only** — pre-op the new
   files don't exist yet, so a pre-scan is pure cost.
+- `PYGATE_RE` (pip/pip3/pipx/uv/python/python3) is **PreToolUse** → T0+T1 only. The point is
+  to run the Tier-0 `.pth` sweep *before* the interpreter auto-executes a poisoned
+  site-packages startup hook. **Never T2** (node_modules irrelevant), **never `cooldown_check`**
+  (npm-registry-specific; a PyPI cooldown is future work). `PYINSTALL_RE` is the PostToolUse
+  subset (a fresh `.pth` can land) → T0+T1 re-scan. `make`/`./` are deliberately *not* gated:
+  too broad, no matching signatures, pure FP/latency tax — gate only where coverage exists.
+- `UserPromptSubmit` is the **continuous monitor**: T0+T1 only (the fast-changing tiers),
+  **never T2**, fires every human turn, and *can block*. It carries no command (`COMMAND=""`),
+  so the `${COMMAND:+…}` alert interpolations omit cleanly. It is **silent-on-clean** — the
+  always-on 🟢 status line is suppressed for `MODE=prompt_submit` (a 🟢 every prompt spams the
+  transcript); it speaks only on a finding (🚨 block) or degradation (🟡). The 🟡 path is NOT
+  suppressed — a silently-degraded continuous monitor is the invisibility bug all over again.
+- **`alert()` emits three non-interchangeable shapes** keyed on `MODE`: `pre_tool` nests
+  `permissionDecision`/`permissionDecisionReason` under `hookSpecificOutput`; `prompt_submit`
+  uses **top-level** `decision:"block"` + `reason` (model) + `systemMessage` (user) — on UPS
+  `decision` is **mutually exclusive** with `hookSpecificOutput.additionalContext`, so neither
+  is emitted; `session_start`/`post_tool` accumulate and emit `systemMessage` + `additionalContext`.
 
 ### Two sources of truth — keep them in sync (`if` ⊇ regex)
 
@@ -59,9 +83,20 @@ skipped with no signal. JSON can't hold a comment, so the canonical statement li
 the regex block in `wormhook.sh`; this is the mirror. (Don't drop the `if` to "DRY" it to
 one source — that spawns the script on every command; the latency tax isn't worth it.)
 
+**`UserPromptSubmit` is exempt** from `if ⊇ regex`: a UPS payload carries no command, so its
+`hooks.json` entry has **no `if` and no matcher** — it fires every prompt by design, and the
+script gates it purely on `EVENT`. There's no command-class regex to keep it in sync with.
+
 ## Working here
 
-- After editing scripts: `bash -n scripts/*.sh` and `shellcheck -S warning scripts/*.sh`.
+- After editing scripts: syntax-check with the **real shebang shell** (Apple `/bin/bash` is
+  3.2.57), and lint. `bash -n` only parses its **first** file arg — loop, don't glob:
+  `for f in scripts/*.sh; do /bin/bash -n "$f"; done` then `shellcheck -S warning scripts/*.sh`.
+  (A Homebrew bash on `$PATH` will pass files that 3.2 rejects — always check with `/bin/bash`.)
+- **bash 3.2 gotcha in `$(…)`:** its command-substitution parser miscounts a lone `'`
+  (apostrophe) even inside a heredoc body, swallowing the closing `)`. So **no contractions**
+  ("it's", "don't") in any `alert "..." "$(cat <<BODY … BODY)"` body — write "it has"/"do not".
+  `bash -n` under a newer bash won't catch it; only `/bin/bash` will.
 - After editing `hooks.json`/manifests: `jq -e . hooks/hooks.json .claude-plugin/*.json`.
 - Smoke-test a path by piping a synthetic payload:
   `echo '{"tool_input":{"command":"git pull"},"cwd":"/tmp/x","hook_event_name":"PostToolUse"}' | bash scripts/wormhook.sh`

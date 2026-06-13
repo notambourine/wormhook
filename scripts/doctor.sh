@@ -28,6 +28,12 @@ command -v jq &>/dev/null || \
 command -v rg &>/dev/null || \
   note "ripgrep not found — content scans use slow grep fallback (brew install ripgrep)"
 
+# curl: soft dependency — the version cooldown (unknown-worm publish-age gate) needs it
+# to query registry.npmjs.org. Without it the cooldown degrades to 🟡 fail-open (never
+# blocks); the signature tiers are unaffected.
+command -v curl &>/dev/null || \
+  note "curl not found — version cooldown disabled (fail-open); signature scans unaffected (brew install curl)"
+
 # Version drift: a `/plugin` marketplace refresh updates the clone but NOT the
 # install pointer in installed_plugins.json, so the executing copy can lag the
 # marketplace indefinitely (a stale pre-ripgrep install once spent 6 days

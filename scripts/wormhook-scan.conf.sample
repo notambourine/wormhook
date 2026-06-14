@@ -1,0 +1,13 @@
+# wormhook-scan roots — one path or glob per line; blank lines and # comments ignored.
+#
+# This is the SAMPLE. `wormhook-scan config --init` copies it to
+#   ${XDG_CONFIG_HOME:-~/.config}/wormhook/scan-roots
+# which each teammate edits for their own machine. Globs expand at scan time
+# (a leading ~ becomes $HOME). Root globs must not contain spaces.
+#
+# Point these at wherever you keep cloned repos. Examples:
+
+# ~/sandbox/git-repos/*/
+# ~/sandbox/git-repos/*/*/
+# ~/code/
+# ~/work/

@@ -55,7 +55,7 @@ jobs:
       - name: ShellCheck the scanner
         run: |
           sudo apt-get update && sudo apt-get install -y shellcheck
-          shellcheck scripts/wormhook.sh scripts/malware-patterns.sh
+          shellcheck -S warning scripts/*.sh
 
       # Versioning is manual; this tripwire turns "forgot to bump" into a red X
       # instead of silent drift. Behavior lives in scripts/ + hooks/ -- docs- and

@@ -34,10 +34,10 @@ claude plugin install wormhook@notambourine --scope user
 Requires `jq` and `bash`. [`ripgrep`](https://github.com/BurntSushi/ripgrep) is
 optional but strongly recommended — content scans use it when present (43× faster than
 BSD grep on large trees) and fall back to `grep` otherwise. There's nothing to invoke;
-it runs automatically. A silent doctor hook speaks up at `SessionStart` only when a
-dependency is missing, the installed copy lags the marketplace, or a recommended
-[companion firewall](#beyond-the-tiers) (Socket Firewall / `vet`) isn't installed — each
-with the one-liner to fix it.
+it runs automatically. At `SessionStart` a row of doctor status lights (🟢/🟡/🔴/⚪, one per
+check, every session) reports your runtime deps, version drift, out-of-band coverage, the
+recommended [companion firewalls](#beyond-the-tiers) (Socket Firewall / `vet`), and a
+blast-radius exposure audit — each non-green light carries the one-liner to fix it.
 
 ## Run it outside Claude
 
@@ -142,8 +142,8 @@ firewall layer it deliberately doesn't reimplement:
   firewall) and [`safedep/vet`](https://github.com/safedep/vet) (dependency CVE + malicious-
   package audit) do, and far better than a hook can. Rather than reimplement a thin version
   of that with its own network calls, wormhook stays **fully local** and the `SessionStart`
-  doctor nudges you (once, silently if present) to install them — "run alongside, not
-  instead." `sfw` is the direct answer to "stop me installing a poisoned version."
+  `firewall` light nudges you to install them (🟢 when both are present) — "run alongside,
+  not instead." `sfw` is the direct answer to "stop me installing a poisoned version."
 
 ### Blast-radius exposure audit
 
@@ -154,8 +154,8 @@ hardware-held SSH keys; secrets-manager injection over `.env`). The one slice wo
 positioned to own is a read-only, advisory **posture check** — it already runs at `SessionStart`
 and already encodes the exact paths the worms harvest.
 
-The `SessionStart` doctor prints a machine-specific punch list of **long-lived secrets sitting
-in worm-targeted paths** — what would get exfiltrated if you're hit:
+The `SessionStart` `exposure` light prints a machine-specific punch list of **long-lived secrets
+sitting in worm-targeted paths** — what would get exfiltrated if you're hit (🟢 when clean):
 
 - **Passphrase-less SSH private keys** (detected via `ssh-keygen -y -P ''`, which catches the new
   OpenSSH key format that grepping for `ENCRYPTED` misses) — and names the specific key files.

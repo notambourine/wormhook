@@ -6,7 +6,7 @@
 #
 # NO NETWORK: every tier is a local filesystem/stat/grep operation. The install-time
 # *firewall* job (registry intelligence: typosquats, malicious-version blocking, age/
-# reputation) is deliberately ceded to Socket Firewall (sfw) + safedep/vet — doctor.sh
+# reputation) is deliberately ceded to Socket Firewall (sfw) + safedep/vet — doctor/firewall.sh
 # nudges you to install them. wormhook is the independent, local, near-zero-FP lock.
 #
 # Two behaviors backstop the signature tiers where they're structurally blind:
@@ -823,8 +823,9 @@ if [[ -z "$ALERTS" ]]; then
     jq -nc --arg msg "🟡 [wormhook] passed with caveats ($SCOPE) — $WARNINGS" '{verdict: "yellow", systemMessage: $msg}'
   elif [[ "$MODE" != "prompt_submit" ]]; then
     # Clean 🟢 is suppressed for prompt_submit ONLY: it fires every human turn, so a 🟢 each
-    # time would spam the transcript. Like doctor.sh, the continuous monitor stays silent when
-    # healthy and speaks only on a finding (🚨 block above) or degradation (🟡 above).
+    # time would spam the transcript. The continuous monitor stays silent when healthy and
+    # speaks only on a finding (🚨 block above) or degradation (🟡 above). (Note: the SessionStart
+    # doctor checks, by contrast, now emit a 🟢 every session — that is the dashboard, not a per-turn monitor.)
     jq -nc --arg msg "🟢 [wormhook] clean ($SCOPE)" '{verdict: "green", systemMessage: $msg}'
   fi
 fi

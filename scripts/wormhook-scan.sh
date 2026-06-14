@@ -40,6 +40,10 @@ _die() { echo "wormhook-scan: $1" >&2; exit "${2:-1}"; }
 . "$SCRIPT_DIR/wormhook-const.sh" 2>/dev/null || _die "constants not found ($SCRIPT_DIR/wormhook-const.sh)"
 LABEL="$WORMHOOK_LAUNCHD_LABEL"
 
+# Verdict exit codes — the single source for the 0/1/2 convention in cmd_help and every
+# scan/check/git-hook return (and the shell-init guard keys on EXIT_CRIT=1).
+readonly EXIT_OK=0 EXIT_CRIT=1 EXIT_DEGRADED=2
+
 CONFIG="${WORMHOOK_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/wormhook/scan-roots}"
 SAMPLE="$SCRIPT_DIR/wormhook-scan.conf.sample"
 SWEEP_LOG="${WORMHOOK_LOG:-$HOME/Library/Logs/wormhook-sweep.log}"
@@ -93,6 +97,18 @@ _titles() {  # finding titles, one per line. Prefer structured .findings[].title
 # Empty for older engine output (no .findings) => every finding treated local (safe: never masks).
 _keys() { jq -r '(.findings // []) | .[] | (.title + "\u001f" + .body) | @base64' 2>/dev/null; }
 _detail() { jq -r '.hookSpecificOutput.additionalContext // .systemMessage // ""' 2>/dev/null; }
+_systemmsg() { jq -r '.systemMessage // ""' 2>/dev/null; }
+# Generic verdict render+exit for single-repo verbs: prints _detail on 🚨, else the status
+# line, unless quiet; returns the EXIT_* code. (cmd_git_hook keeps its own loud post-pull
+# banner but shares EXIT_* and _systemmsg; cmd_scan's fleet loop has its own dedup/render.)
+_render_verdict() {  # $1=engine JSON  $2=quiet(0/1)  -> echoes, returns EXIT_*
+  local out="$1" quiet="$2" glyph; glyph=$(printf '%s' "$out" | _glyph)
+  case "$glyph" in
+    "🚨") [[ "$quiet" == 1 ]] || printf '%s' "$out" | _detail; return "$EXIT_CRIT" ;;
+    "🟡") [[ "$quiet" == 1 ]] || printf '%s' "$out" | _systemmsg; return "$EXIT_DEGRADED" ;;
+    *)    [[ "$quiet" == 1 ]] || printf '%s' "$out" | _systemmsg; return "$EXIT_OK" ;;
+  esac
+}
 _msg_tail() {  # short one-liner for the table: first alert title, or the warn caveat
   local j="$1" t
   t=$(printf '%s' "$j" | _titles | head -n1)
@@ -184,11 +200,11 @@ cmd_scan() {
       printf '\n🚨 wormhook-scan: machine persistence detected\n\n%s\n' "$gdetail"
       [[ "$notify" == 1 ]] && _notify "wormhook: persistence detected" "$(printf '%s' "$global_titles" | head -n1)"
       [[ -n "$logfile" ]] && printf '%s  PERSISTENCE: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$(printf '%s' "$global_titles" | tr '\n' ';')" >> "$logfile"
-      return 1
+      return "$EXIT_CRIT"
     fi
     [[ "$quiet" == 1 ]] || printf '🟢 [wormhook-scan] no machine persistence artifacts\n'
     [[ -n "$logfile" ]] && printf '%s  persistence clean\n' "$(date '+%Y-%m-%dT%H:%M:%S')" >> "$logfile"
-    return 0
+    return "$EXIT_OK"
   fi
 
   # Default bases from env/config when no PATHS were given.
@@ -264,14 +280,14 @@ cmd_scan() {
 
   if [[ "$json" == 1 ]]; then
     printf '%s' "$NDJSON" | jq -s --argjson global "$(printf '%s' "$global_titles" | jq -R . | jq -sc .)" '{global_persistence:$global,repos:.}'
-    [[ "$r" -gt 0 || "$had_global" == 1 ]] && return 1; [[ "$y" -gt 0 ]] && return 2; return 0
+    [[ "$r" -gt 0 || "$had_global" == 1 ]] && return "$EXIT_CRIT"; [[ "$y" -gt 0 ]] && return "$EXIT_DEGRADED"; return "$EXIT_OK"
   fi
 
   # ── Render ───────────────────────────────────────────────────────────────────
   local any_finding=0; [[ "$r" -gt 0 || "$y" -gt 0 || "$had_global" == 1 ]] && any_finding=1
   if [[ "$quiet" == 1 && "$any_finding" == 0 ]]; then
     [[ -n "$logfile" ]] && printf '%s  clean (%d repos, %s)\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$n" "$mode" >> "$logfile"
-    return 0
+    return "$EXIT_OK"
   fi
 
   if [[ "$quiet" == 0 ]]; then
@@ -302,9 +318,9 @@ cmd_scan() {
     _notify "wormhook: $r critical, $y degraded" "$([[ "$had_global" == 1 ]] && printf 'MACHINE PERSISTENCE + ')$n repos scanned"
   fi
 
-  [[ "$r" -gt 0 || "$had_global" == 1 ]] && return 1
-  [[ "$y" -gt 0 ]] && return 2
-  return 0
+  [[ "$r" -gt 0 || "$had_global" == 1 ]] && return "$EXIT_CRIT"
+  [[ "$y" -gt 0 ]] && return "$EXIT_DEGRADED"
+  return "$EXIT_OK"
 }
 
 # ══ install-cli ════════════════════════════════════════════════════════════════
@@ -548,10 +564,10 @@ cmd_git_hook() {
     printf '\033[1;31m\n⚠  Do NOT run npm/node/dev in this repo until you have cleared the finding above.\033[0m\n'
     # shellcheck disable=SC2016  # literal instruction text shown to the user, not an expansion
     printf '   (optional backstop: eval "$(wormhook-scan shell-init)" makes npm/pnpm refuse to run here automatically.)\n'
-    return 1
+    return "$EXIT_CRIT"
   fi
-  [[ "$glyph" == "🟡" ]] && printf '%s\n' "$(printf '%s' "$out" | jq -r '.systemMessage // ""')"
-  return 0
+  [[ "$glyph" == "🟡" ]] && printf '%s' "$out" | _systemmsg
+  return "$EXIT_OK"
 }
 
 # ══ check ════════════════════════════════════════════════════════════════════════
@@ -567,12 +583,7 @@ cmd_check() {
       *) [[ -d "$a" ]] && dir="$a" ;;
     esac
   done
-  local out glyph; out=$(_scan_one "$dir" "$mode"); glyph=$(printf '%s' "$out" | _glyph)
-  case "$glyph" in
-    "🚨") [[ "$quiet" == 1 ]] || printf '%s\n' "$(printf '%s' "$out" | _detail)"; return 1 ;;
-    "🟡") [[ "$quiet" == 1 ]] || printf '%s\n' "$(printf '%s' "$out" | jq -r '.systemMessage // ""')"; return 2 ;;
-    *)    [[ "$quiet" == 1 ]] || printf '%s\n' "$(printf '%s' "$out" | jq -r '.systemMessage // ""')"; return 0 ;;
-  esac
+  _render_verdict "$(_scan_one "$dir" "$mode")" "$quiet"
 }
 
 # ══ shell-init ═══════════════════════════════════════════════════════════════════

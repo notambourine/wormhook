@@ -357,7 +357,9 @@ _hook_block() {
   cat <<'BLOCK'
 # >>> wormhook >>>
 # Added by `wormhook-scan install-git-hook`. Out-of-band on-pull audit; fail-open.
-command -v wormhook-scan >/dev/null 2>&1 && wormhook-scan git-hook || true
+# Forward the hook name + git's args so the report can show the correct changed-file
+# range per hook (post-checkout passes <old> <new>; merge/rebase set ORIG_HEAD).
+command -v wormhook-scan >/dev/null 2>&1 && wormhook-scan git-hook "$(basename "$0")" "$@" || true
 # <<< wormhook <<<
 BLOCK
 }
@@ -483,11 +485,21 @@ TXT
 # cannot block the pull (the files already landed); the human-visible error is the gate.
 # Fail-open: any error exits 0 so it never wedges a git operation.
 cmd_git_hook() {
-  local repo changed out glyph
+  local hook="${1:-}"; [ $# -gt 0 ] && shift   # $1=hook name; remaining "$@" are git's hook args
+  local repo changed="" out glyph
   repo=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null) || return 0
-  if git -C "$repo" rev-parse -q --verify ORIG_HEAD >/dev/null 2>&1; then
-    changed=$(git -C "$repo" diff --stat ORIG_HEAD HEAD 2>/dev/null | tail -n 50)
-  fi
+  # Pick the "files this update changed" range HONESTLY per hook. ORIG_HEAD is the
+  # pre-op HEAD only for merge/rebase; post-checkout instead passes <prev> <new> on
+  # argv (and a third flag arg: 1=branch move, 0=file checkout => no meaningful range).
+  # Legacy installs forward no hook name (hook="") => fall through to the ORIG_HEAD path.
+  case "$hook" in
+    post-checkout)
+      [ "${3:-1}" = 1 ] && [ -n "${1:-}" ] && [ -n "${2:-}" ] && \
+        changed=$(git -C "$repo" diff --stat "$1" "$2" 2>/dev/null | tail -n 50) ;;
+    *)
+      git -C "$repo" rev-parse -q --verify ORIG_HEAD >/dev/null 2>&1 && \
+        changed=$(git -C "$repo" diff --stat ORIG_HEAD HEAD 2>/dev/null | tail -n 50) ;;
+  esac
   out=$(_scan_one "$repo" fast); glyph=$(printf '%s' "$out" | _glyph)
   if [[ "$glyph" == "🚨" ]]; then
     printf '\033[1;31m\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n⛔  wormhook: SUPPLY-CHAIN IOC after a git update\n    %s\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n' "${repo/#$HOME/~}"

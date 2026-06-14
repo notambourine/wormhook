@@ -12,10 +12,14 @@ that aren't obvious from the code.
 - `scripts/malware-patterns.sh` — **single source of truth** for signatures, sourced by
   the hook. Add a campaign here once and every tier picks it up. Extended-regex only
   (must parse identically under bash and zsh).
-- `scripts/doctor.sh` — silent-unless-degraded SessionStart health check (wormhook deps +
-  version drift + out-of-band coverage + a nudge to install the ceded install-firewall layer:
-  Socket Firewall, `vet`). Also hosts the always-on blast-radius exposure audit —
-  advisory-only, never blocks, silent unless it finds something (issue #15).
+- `scripts/doctor/*.sh` — the SessionStart health dashboard, **one focused check per file**, each
+  registered as its own SessionStart hook and each emitting **one** `🟢/🟡/🔴/⚪` status light
+  **every session** (issue #22, supersedes the old monolithic silent-unless-degraded `doctor.sh`):
+  `deps.sh` (jq hard + ripgrep soft — owns the jq-🔴 alarm), `firewall.sh` (the ceded Socket
+  Firewall + `vet` nudge), `coverage.sh` (out-of-band CLI/git-hook/launchd), `drift.sh` (version
+  drift), `exposure.sh` (always-on blast-radius audit — advisory-only, never blocks, issue #15).
+  `scripts/doctor/_utils.sh` is sourced by each (payload-free emit helpers `wh_emit`/`wh_flag`,
+  the `wh_silenced` skip-var logic, and the `wormhook-const.sh` load); it is sourced, not executed.
 - `scripts/wormhook-scan.sh` — the **out-of-band CLI** (+ `…conf.sample`). Drives the engine
   from any shell for fleet checks, an hourly launchd sweep, and a global git hook. See
   "Out-of-band adapters" below.
@@ -32,16 +36,21 @@ that aren't obvious from the code.
   shared-field / `$ref` mechanism, so a byte-identical copy is just drift waiting to happen — we
   deliberately gave each a distinct job instead, and there is **no parity check**. Edit whichever
   fits the surface; do not mirror one into the other.
-- **`doctor.sh` follows the hybrid jq model (KEY-DECISION 2026-06-13, supersedes the older
-  fully-jq-free rule).** The *one* line doctor must emit without `jq` — `jq missing — scans
-  are OFF` — is a hand-rolled static `printf` in an early-exit at the top of the file. That
-  alarm is the watchdog's whole reason to exist: if doctor itself needed `jq`, it would go
-  silent in the exact case it exists to catch (the "silent for a month" invisible-failure
-  bug). Everything *past* that early-exit only matters when `jq` is present (a jq-less machine
-  has no working scanner to nudge about), so it is built with `jq --arg`. That keeps the
-  output DRY (real newlines, no literal-`\n` bookkeeping) and makes interpolation injection-
-  safe — which is why the exposure audit can name the actual offending key files. Rule: the
-  jq-missing alarm stays static + dependency-free; every other line goes through `jq --arg`.
+- **The doctor checks follow the hybrid jq model (KEY-DECISION 2026-06-13, refined for the
+  0.10.0 split; supersedes the older fully-jq-free rule).** The *one* line the doctor must emit
+  without `jq` — `jq missing, scans are OFF` — is a hand-rolled static `printf` early-exit at
+  the top of **`doctor/deps.sh` only**, which **owns that alarm for the whole split**. That alarm
+  is the watchdog's whole reason to exist: if the check needed `jq`, it would go silent in the
+  exact case it exists to catch (the "silent for a month" invisible-failure bug). Every *other*
+  check inherits a single silent fail-open: `doctor/_utils.sh` runs `command -v jq || exit 0` at
+  source time, and sourcing a file that `exit`s exits the caller — so a jq-less machine silences
+  every non-deps check (deps.sh already shouted) with no per-file duplication. Everything past
+  the guard uses `jq --arg`: DRY output (real newlines, no literal-`\n`) and injection-safe
+  interpolation (why exposure can name the offending key files). **Because only `deps.sh` alarms,
+  a missing/corrupt `deps.sh` would silently disarm it — so a CI step asserts all six
+  `doctor/*.sh` exist + are executable and `deps.sh` is registered first in `hooks.json`, turning
+  that corruption case into a red PR.** Rule: the jq-missing alarm is static + `deps.sh`-only;
+  every other line goes through `jq --arg`.
 - **`wormhook.sh` must route all scanned paths/commands through `jq --arg`.** It embeds
   untrusted filenames/commands into output; bare interpolation is an injection hole.
 - **Tier 0 always runs and is never cached.** A poisoned `~/.claude` hook re-runs every
@@ -61,8 +70,8 @@ that aren't obvious from the code.
   a lower-blast tier rather than discard it.
 - **No network calls — ever.** Every tier is local (stat/grep/jq over the filesystem). The
   install-time registry-firewall job (malicious-version blocking, typosquats, publish-age/
-  reputation) is **ceded to Socket Firewall (`sfw`) + `safedep/vet`**; `doctor.sh` nudges the
-  user to install them. If you're tempted to add a registry lookup (e.g. a publish-age
+  reputation) is **ceded to Socket Firewall (`sfw`) + `safedep/vet`**; `doctor/firewall.sh`
+  nudges the user to install them. If you're tempted to add a registry lookup (e.g. a publish-age
   "cooldown"), that belongs in `sfw`/`vet`, not here — independence and zero-network are the
   design bet, and a hook can't transparently route an install through a firewall anyway (it
   can only allow/deny). See README "deliberately doesn't do".
@@ -117,10 +126,11 @@ The Claude hook is **one trigger, not the engine**. `wormhook-scan.sh` adds the 
 triggers (manual fleet `scan`, hourly launchd sweep, global git hook, opt-in shell exec-guard;
 verbs `scan`/`check`/`git-hook`/`shell-init`/`install-*`/`status`/`config`). The user-facing
 installer is the `/wormhook-setup` slash command (`commands/wormhook-setup.md`), which the
-`SessionStart` doctor coverage line points at. `doctor.sh` emits a per-item checklist; each
-soft nudge is silenceable via `WORMHOOK_SKIP_{RG,SFW,VET,COVERAGE,DRIFT}=1` (or
-`WORMHOOK_DOCTOR_QUIET=1` for all), set in repo/user `settings.json` `env` — but the jq
-"scans are OFF" alarm is intentionally **not** silenceable. These invariants hold:
+`SessionStart` `doctor/coverage.sh` light points at. Each doctor check emits its own status
+light; a soft nudge is silenceable via `WORMHOOK_SKIP_{RG,SFW,VET,COVERAGE,DRIFT}=1` (or
+`WORMHOOK_DOCTOR_QUIET=1` for all), set in repo/user `settings.json` `env` — a silenced nudge
+degrades to ⚪, never to actual silence. The jq "scans are OFF" 🔴 (in `doctor/deps.sh`) is
+intentionally **not** silenceable. These invariants hold:
 
 - **Adapters never duplicate detection.** Every verb drives the *unchanged* `wormhook.sh` by
   synthesizing the same stdin payload Claude sends — `SessionStart` for fast (T0+T1, T2 on
@@ -159,9 +169,12 @@ soft nudge is silenceable via `WORMHOOK_SKIP_{RG,SFW,VET,COVERAGE,DRIFT}=1` (or
 ## Working here
 
 - After editing scripts: syntax-check with the **real shebang shell** (Apple `/bin/bash` is
-  3.2.57), and lint. `bash -n` only parses its **first** file arg — loop, don't glob:
-  `for f in scripts/*.sh; do /bin/bash -n "$f"; done` then `shellcheck -S warning scripts/*.sh`.
-  (A Homebrew bash on `$PATH` will pass files that 3.2 rejects — always check with `/bin/bash`.)
+  3.2.57), and lint. `bash -n` only parses its **first** file arg — loop, don't glob, and the
+  `scripts/*.sh` glob does **not** recurse, so list the `doctor/` subdir explicitly:
+  `for f in scripts/*.sh scripts/doctor/*.sh; do /bin/bash -n "$f"; done` then
+  `shellcheck scripts/*.sh scripts/doctor/*.sh` (CI uses the default floor — stricter than
+  `-S warning`). (A Homebrew bash on `$PATH` will pass files that 3.2 rejects — always check
+  with `/bin/bash`.)
 - **bash 3.2 gotcha in `$(…)`:** its command-substitution parser miscounts a lone `'`
   (apostrophe) even inside a heredoc body, swallowing the closing `)`. So **no contractions**
   ("it's", "don't") in any `alert "..." "$(cat <<BODY … BODY)"` body — write "it has"/"do not".

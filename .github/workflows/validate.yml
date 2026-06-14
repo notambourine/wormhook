@@ -57,7 +57,25 @@ jobs:
           sudo apt-get update && sudo apt-get install -y shellcheck
           # Default severity floor (style/info), not -S warning: the new CLI is the
           # whole product, and SC2015-class footguns are exactly what we want red.
-          shellcheck scripts/*.sh
+          # scripts/doctor/*.sh (the split SessionStart checks) are NOT covered by the
+          # non-recursive scripts/*.sh glob -- list the subdir explicitly.
+          shellcheck scripts/*.sh scripts/doctor/*.sh
+
+      # Presence-assert for the split doctor checks. The jq-missing "scans are OFF" 🔴
+      # alarm is owned solely by doctor/deps.sh (every other check stays silent when jq
+      # is absent), so a missing/non-exec deps.sh would silently disarm the one alarm the
+      # doctor exists to raise. This turns that corruption case into a red PR instead of a
+      # user's silent SessionStart. _utils.sh is sourced (not executed), so it is checked
+      # for existence only, not the +x bit.
+      - name: Assert doctor checks present + executable
+        run: |
+          test -f scripts/doctor/_utils.sh || { echo "::error::scripts/doctor/_utils.sh missing"; exit 1; }
+          for c in deps firewall coverage drift exposure; do
+            f="scripts/doctor/$c.sh"
+            test -f "$f" || { echo "::error file=$f::doctor check missing"; exit 1; }
+            test -x "$f" || { echo "::error file=$f::doctor check not executable (chmod +x)"; exit 1; }
+          done
+          echo "doctor checks present + executable: deps firewall coverage drift exposure (+ _utils.sh)"
 
       # Versioning is manual; this tripwire turns "forgot to bump" into a red X
       # instead of silent drift. Behavior lives in scripts/ + hooks/ -- docs- and

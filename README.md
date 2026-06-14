@@ -145,7 +145,7 @@ firewall layer it deliberately doesn't reimplement:
   doctor nudges you (once, silently if present) to install them — "run alongside, not
   instead." `sfw` is the direct answer to "stop me installing a poisoned version."
 
-### Blast-radius exposure audit (opt-in)
+### Blast-radius exposure audit
 
 Detection always has a false-negative rate. The **blast-radius** layer is the only one that
 helps *after* a successful exfil: how bad is it when we miss? Most of that is environmental and
@@ -154,9 +154,8 @@ hardware-held SSH keys; secrets-manager injection over `.env`). The one slice wo
 positioned to own is a read-only, advisory **posture check** — it already runs at `SessionStart`
 and already encodes the exact paths the worms harvest.
 
-Opt in by exporting `WORMHOOK_POSTURE_AUDIT=1` (in your shell, or a repo/user
-`settings.json` `"env"`). The `SessionStart` doctor then prints a machine-specific punch list of
-**long-lived secrets sitting in worm-targeted paths** — what would get exfiltrated if you're hit:
+The `SessionStart` doctor prints a machine-specific punch list of **long-lived secrets sitting
+in worm-targeted paths** — what would get exfiltrated if you're hit:
 
 - **Passphrase-less SSH private keys** (detected via `ssh-keygen -y -P ''`, which catches the new
   OpenSSH key format that grepping for `ENCRYPTED` misses) — and names the specific key files.
@@ -165,8 +164,9 @@ Opt in by exporting `WORMHOOK_POSTURE_AUDIT=1` (in your shell, or a repo/user
 - **A `.env` in the repo with a live-looking secret** — gated on a real credential *shape* (AWS
   `AKIA…`, GitHub/OpenAI/Google keys, a PEM block), not merely a `KEY=` line, to stay near-zero-FP.
 
-It is **advisory only and never blocks** (posture is not an IOC), defaults **off**, and stays
-silent when it finds nothing. It is deliberately capped at this one checklist — see
+It is **advisory only and never blocks** (posture is not an IOC) and **silent when it finds
+nothing** — the near-zero false-positive rate of these three checks is what lets it run on every
+launch without becoming a nag. It is deliberately capped at this one checklist — see
 [the design note](#what-it-deliberately-doesnt-do) on why credential-*posture management* is a
 different job from malware detection.
 

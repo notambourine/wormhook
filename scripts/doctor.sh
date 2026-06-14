@@ -10,12 +10,11 @@
 # deliberately does NOT do itself (Socket Firewall + safedep/vet) — registry intelligence,
 # malicious-version blocking, typosquat/age scoring. wormhook is the local lock; those own
 # the registry boundary. "Run alongside, not instead" — see README.
-# (3) an OPT-IN blast-radius exposure audit (WORMHOOK_POSTURE_AUDIT) — a read-only punch
-# list of high-value, long-lived secrets sitting in the exact paths the worms harvest. This
-# is the "how bad if detection misses" layer (issue #15), not detection itself: it is
-# ADVISORY ONLY and can NEVER block (doctor.sh emits systemMessage, never a decision).
-# Default OFF — a passphrase-less key you have accepted is a nag, not an IOC; opt in
-# per-machine and measure the noise before it earns a default-on slot.
+# (3) a blast-radius exposure audit — a read-only punch list of high-value, long-lived
+# secrets sitting in the exact paths the worms harvest. This is the "how bad if detection
+# misses" layer (issue #15), not detection itself: it is ADVISORY ONLY and can NEVER block
+# (doctor.sh emits systemMessage, never a decision). Always on, but silent unless it finds
+# something — scoped to three near-zero-FP checks so it stays a punch list, not a nag.
 #
 # KEY-DECISION 2026-06-13: hybrid jq model (supersedes the 2026-06-06 "fully jq-free" rule).
 # The ONE thing doctor exists to catch is "jq is missing => the scanner is silently OFF" —
@@ -121,51 +120,47 @@ case "$PLUGIN_ROOT" in
     ;;
 esac
 
-# ── Blast-radius exposure audit (issue #15) — OPT-IN, advisory, never blocks. ────────────
+# ── Blast-radius exposure audit (issue #15) — always on, advisory, never blocks. ─────────
 # A read-only punch list of long-lived secrets sitting in the exact paths the worms harvest:
 # "how bad if detection misses." All checks are pure stat/grep. Findings flow through jq --arg
 # at emit time, so a finding may safely name the actual offending file — no secret VALUE is
 # ever read into the message, only paths/filenames. Scoped to the three lowest-FP checks from
 # the issue's "suggested next step" (passphrase-less SSH · plaintext GitHub token · live-looking
-# .env); the npm-token and static-AWS-creds candidates are deferred until these three's FP rate
-# is measured on real machines.
-case "${WORMHOOK_POSTURE_AUDIT:-}" in
-  ""|0|false|no|off|FALSE|NO|OFF) ;;  # default OFF — opt in per-machine
-  *)
-    # 1) Passphrase-less SSH private keys. `ssh-keygen -y -P '' -f <key>` exits 0 ONLY when the
-    #    key has no passphrase (it never prompts, because -P supplies one) — more robust than
-    #    grepping for "ENCRYPTED", which misses the new OpenSSH key format. One ~/.ssh sweep
-    #    (skip pubkeys/known_hosts/config); ssh-keygen rejects non-keys, so the survivors are
-    #    real private keys. Names them in the finding (jq --arg makes that injection-safe).
-    if command -v ssh-keygen &>/dev/null; then
-      _open=()
-      for _k in "$HOME"/.ssh/*; do
-        [[ -f "$_k" ]] || continue
-        case "$_k" in *.pub|*/known_hosts|*/known_hosts.old|*/config|*/authorized_keys|*/authorized_keys2) continue ;; esac
-        ssh-keygen -y -P '' -f "$_k" &>/dev/null && _open+=("$(basename "$_k")")
-      done
-      (( ${#_open[@]} )) && audit+=("passphrase-less SSH private key(s) in ~/.ssh: ${_open[*]} — add a passphrase (ssh-keygen -p) or move to a hardware/agent-held key")
-    fi
-    # 2) Plaintext GitHub token on disk or in env. A classic PAT (ghp_) does NOT expire by
-    #    default — the worst exfil prize; an OAuth token (gho_) is the gh-CLI equivalent. Match
-    #    the token PREFIX only; the matched value is never echoed.
-    _pat=0
-    for _f in "$HOME/.git-credentials" "$HOME/.config/gh/hosts.yml"; do
-      [[ -f "$_f" ]] && grep -Eq 'gh[po]_[A-Za-z0-9]{20,}' "$_f" 2>/dev/null && _pat=1
-    done
-    for _v in "${GH_TOKEN:-}" "${GITHUB_TOKEN:-}"; do
-      case "$_v" in ghp_*|gho_*) _pat=1 ;; esac
-    done
-    (( _pat )) && audit+=("plaintext GitHub token (classic ghp_/oauth gho_) in ~/.git-credentials, gh config, or env — prefer a fine-grained, expiring PAT or a credential helper")
-    # 3) A .env in the working directory carrying a *recognizable* live credential (not merely
-    #    KEY=…) — requiring a real token shape (AWS AKIA / GitHub / OpenAI sk- / Google AIza /
-    #    PEM private key) keeps this near-zero-FP versus flagging every .env placeholder.
-    if [[ -f "$PWD/.env" ]] && \
-       grep -Eq '(AKIA[0-9A-Z]{16}|gh[posru]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)' "$PWD/.env" 2>/dev/null; then
-      audit+=("plaintext .env in this repo holds a live-looking secret — inject from a secrets manager and keep .env out of git")
-    fi
-    ;;
-esac
+# .env); the near-zero FP rate is what lets it run unconditionally without becoming a nag. The
+# npm-token and static-AWS-creds candidates stay deferred to hold that FP bar.
+
+# 1) Passphrase-less SSH private keys. `ssh-keygen -y -P '' -f <key>` exits 0 ONLY when the
+#    key has no passphrase (it never prompts, because -P supplies one) — more robust than
+#    grepping for "ENCRYPTED", which misses the new OpenSSH key format. One ~/.ssh sweep
+#    (skip pubkeys/known_hosts/config); ssh-keygen rejects non-keys, so the survivors are
+#    real private keys. Names them in the finding (jq --arg makes that injection-safe).
+if command -v ssh-keygen &>/dev/null; then
+  _open=()
+  for _k in "$HOME"/.ssh/*; do
+    [[ -f "$_k" ]] || continue
+    case "$_k" in *.pub|*/known_hosts|*/known_hosts.old|*/config|*/authorized_keys|*/authorized_keys2) continue ;; esac
+    ssh-keygen -y -P '' -f "$_k" &>/dev/null && _open+=("$(basename "$_k")")
+  done
+  (( ${#_open[@]} )) && audit+=("passphrase-less SSH private key(s) in ~/.ssh: ${_open[*]} — add a passphrase (ssh-keygen -p) or move to a hardware/agent-held key")
+fi
+# 2) Plaintext GitHub token on disk or in env. A classic PAT (ghp_) does NOT expire by
+#    default — the worst exfil prize; an OAuth token (gho_) is the gh-CLI equivalent. Match
+#    the token PREFIX only; the matched value is never echoed.
+_pat=0
+for _f in "$HOME/.git-credentials" "$HOME/.config/gh/hosts.yml"; do
+  [[ -f "$_f" ]] && grep -Eq 'gh[po]_[A-Za-z0-9]{20,}' "$_f" 2>/dev/null && _pat=1
+done
+for _v in "${GH_TOKEN:-}" "${GITHUB_TOKEN:-}"; do
+  case "$_v" in ghp_*|gho_*) _pat=1 ;; esac
+done
+(( _pat )) && audit+=("plaintext GitHub token (classic ghp_/oauth gho_) in ~/.git-credentials, gh config, or env — prefer a fine-grained, expiring PAT or a credential helper")
+# 3) A .env in the working directory carrying a *recognizable* live credential (not merely
+#    KEY=…) — requiring a real token shape (AWS AKIA / GitHub / OpenAI sk- / Google AIza /
+#    PEM private key) keeps this near-zero-FP versus flagging every .env placeholder.
+if [[ -f "$PWD/.env" ]] && \
+   grep -Eq '(AKIA[0-9A-Z]{16}|gh[posru]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)' "$PWD/.env" 2>/dev/null; then
+  audit+=("plaintext .env in this repo holds a live-looking secret — inject from a secrets manager and keep .env out of git")
+fi
 
 # Assemble the one-object payload. The hook protocol allows EXACTLY ONE JSON object on stdout,
 # so every 🟡 block lands inside a single systemMessage built here with real newlines and
@@ -181,7 +176,7 @@ if (( ${#audit[@]} )); then
   [[ -n "$msg" ]] && msg+=$'\n'
   msg+="🟡 [wormhook] exposure audit — ${#audit[@]} long-lived secret class(es) in worm-targeted paths (what gets exfiltrated if detection misses):"
   for _l in "${audit[@]}"; do msg+=$'\n  • '"$_l"; done
-  msg+=$'\n  ↳ shrink the blast radius: passphrase-protect keys, prefer short-lived/fine-grained tokens, keep secrets in a manager not plaintext .env. [advisory only; export WORMHOOK_POSTURE_AUDIT=0 to mute]'
+  msg+=$'\n  ↳ shrink the blast radius: passphrase-protect keys, prefer short-lived/fine-grained tokens, keep secrets in a manager not plaintext .env. [advisory only]'
 fi
 [[ -z "$msg" ]] && exit 0
 jq -cn --arg m "$msg" '{systemMessage:$m}'

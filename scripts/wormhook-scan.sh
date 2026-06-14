@@ -319,7 +319,9 @@ TXT
   mkdir -p "$HOME/Library/LaunchAgents" "$(dirname "$SWEEP_LOG")"
   # ProgramArguments: bin scan --fast --quiet-if-clean --notify --log LOG [paths...]
   local args=("$bin" scan --fast --quiet-if-clean --notify --log "$SWEEP_LOG")
-  args+=("${paths[@]}")
+  # bash 3.2 (Apple /bin/bash) aborts on "${paths[@]}" when paths is an empty array
+  # under `set -u` — and no-PATHS is the default form (config/env roots). Guard the append.
+  [[ ${#paths[@]} -gt 0 ]] && args+=("${paths[@]}")
   { printf '<?xml version="1.0" encoding="UTF-8"?>\n'
     printf '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
     printf '<plist version="1.0"><dict>\n'

@@ -1,7 +1,9 @@
 #!/bin/bash
-# Environment doctor: SILENT when wormhook's runtime deps are healthy AND its
-# recommended companion install-firewalls are present; one 🟡 line otherwise. Runs
-# at SessionStart alongside the scanner.
+# Environment doctor: SILENT when wormhook's runtime deps are healthy AND its recommended
+# companion install-firewalls are present AND the out-of-band triggers are wired; otherwise
+# one 🟡 message with a per-item checklist. Runs at SessionStart alongside the scanner. Each
+# soft item carries a [silence: WORMHOOK_SKIP_<ITEM>=1] hint so a consciously-declined nudge
+# can be muted (repo or user settings.json "env"); WORMHOOK_DOCTOR_QUIET=1 mutes all soft items.
 #
 # Two jobs: (1) wormhook's own runtime deps (jq hard, ripgrep soft, version drift);
 # (2) a nudge to install the install-time firewall layer wormhook deliberately does
@@ -23,16 +25,30 @@
 set -uo pipefail
 
 missing=""
-note() { missing="${missing:+$missing; }$1"; }
+note() { missing="${missing:+$missing\\n}  • $1"; }
+# Per-item noise control: set WORMHOOK_SKIP_<ITEM>=1 — in repo .claude/settings.json or user
+# ~/.claude/settings.json "env" — to silence a nudge you have consciously declined; or
+# WORMHOOK_DOCTOR_QUIET=1 to mute every soft nudge below. The jq "scans are OFF" alarm is
+# NEVER mutable — silencing it would reinstate the invisible-failure bug doctor exists to catch.
+QUIET="${WORMHOOK_DOCTOR_QUIET:-}"
+# soft <skip-var-value> <message>: record a silenceable nudge unless its skip var (or QUIET) is set.
+soft() { [[ -n "$QUIET" || -n "$1" ]] && return 0; note "$2"; }
 
-# jq: hard dependency — without it the scanner is OFF, not degraded.
+# Shared launchd-label + git-hook-marker constants (single source — see wormhook-const.sh),
+# so the coverage probe below detects exactly what wormhook-scan.sh installs. Pure assignments,
+# no jq — preserves this file's jq-free / dependency-light invariant. If absent (corrupt
+# install), the constants stay unset and the coverage block self-skips (the jq alarm still runs).
+# shellcheck source=scripts/wormhook-const.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/wormhook-const.sh" 2>/dev/null || true
+
+# jq: hard dependency — without it the scanner is OFF, not degraded. Not silenceable.
 command -v jq &>/dev/null || \
   note "jq missing — scans are OFF (brew install jq)"
 
 # ripgrep: soft dependency — content scans fall back to single-core grep
 # (measured 30.3s vs 0.7s on a 58k-file node_modules).
 command -v rg &>/dev/null || \
-  note "ripgrep not found — content scans use slow grep fallback (brew install ripgrep)"
+  soft "${WORMHOOK_SKIP_RG:-}" "ripgrep not found — content scans use slow grep fallback (brew install ripgrep) [silence: WORMHOOK_SKIP_RG=1]"
 
 # Companion install-firewalls (NOT wormhook deps — the layer it cedes the registry
 # boundary to). wormhook is local/no-network by design; these own malicious-version
@@ -44,9 +60,39 @@ command -v rg &>/dev/null || \
 # the nudge says "keep it current" rather than pin a version floor — a hard-coded floor
 # goes stale, and a static "keep current" string preserves the no-interpolation invariant.
 command -v sfw &>/dev/null || \
-  note "Socket Firewall (sfw) not found — install-time registry firewall missing; pair it with wormhook and keep it current (install: https://docs.socket.dev/docs/socket-firewall)"
+  soft "${WORMHOOK_SKIP_SFW:-}" "Socket Firewall (sfw) not found — install-time registry firewall missing; pair it with wormhook and keep it current (install: https://docs.socket.dev/docs/socket-firewall) [silence: WORMHOOK_SKIP_SFW=1]"
 command -v vet &>/dev/null || \
-  note "safedep/vet not found — no dependency CVE/malicious-package audit (install: https://github.com/safedep/vet)"
+  soft "${WORMHOOK_SKIP_VET:-}" "safedep/vet not found — no dependency CVE/malicious-package audit (install: https://github.com/safedep/vet) [silence: WORMHOOK_SKIP_VET=1]"
+
+# Out-of-band coverage: which non-Claude triggers are wired (CLI on PATH / global git
+# hook / hourly launchd sweep). Silent when all three are set up; otherwise one line
+# showing the full ✓/✗ picture and pointing at the in-Claude installer. The ✓/✗ are
+# fixed glyphs chosen by a conditional — no untrusted content is interpolated, so the
+# jq-free / static-string invariant above still holds (the hooksPath VALUE is only used
+# for a file test, never printed).
+# Self-skip if the shared constants did not load (corrupt install): the jq alarm still runs.
+if [[ -n "${WORMHOOK_HOOK_MARKER:-}" && -n "${WORMHOOK_LAUNCHD_LABEL:-}" ]]; then
+_cli=✗; command -v wormhook-scan &>/dev/null && _cli=✓
+# git-hook is ✓ only when ALL THREE hooks the installer writes carry the marker —
+# checking just post-merge would report full coverage on a partial/corrupted install.
+_hook=✗
+_hd=$(git config --global --get core.hooksPath 2>/dev/null); _hd="${_hd/#\~/$HOME}"
+if [[ -n "$_hd" ]]; then
+  _hk=0
+  for _h in post-merge post-checkout post-rewrite; do
+    [[ -f "$_hd/$_h" ]] && grep -qF "$WORMHOOK_HOOK_MARKER" "$_hd/$_h" 2>/dev/null && _hk=$((_hk+1))
+  done
+  [[ "$_hk" == 3 ]] && _hook=✓
+fi
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  _sweep=✗; launchctl print "gui/$(id -u)/$WORMHOOK_LAUNCHD_LABEL" &>/dev/null && _sweep=✓
+else
+  _sweep="n/a"
+fi
+if [[ "$_cli" == "✗" || "$_hook" == "✗" || "$_sweep" == "✗" ]]; then
+  soft "${WORMHOOK_SKIP_COVERAGE:-}" "out-of-band coverage — CLI:$_cli git-hook:$_hook hourly-sweep:$_sweep — run /wormhook-setup in Claude to finish [silence: WORMHOOK_SKIP_COVERAGE=1]"
+fi
+fi
 
 # Version drift: a `/plugin` marketplace refresh updates the clone but NOT the
 # install pointer in installed_plugins.json, so the executing copy can lag the
@@ -64,11 +110,13 @@ case "$PLUGIN_ROOT" in
     mkt_ver=$(_ver "${PLUGIN_ROOT%/cache/*}/marketplaces/$mkt/.claude-plugin/plugin.json")
     if [[ -n "$self_ver" && -n "$mkt_ver" && "$self_ver" != "$mkt_ver" && \
           "$self_ver$mkt_ver$mkt" != *[!0-9A-Za-z._+-]* ]]; then
-      note "running v$self_ver but marketplace has v$mkt_ver — run: claude plugin update wormhook@$mkt"
+      soft "${WORMHOOK_SKIP_DRIFT:-}" "running v$self_ver but marketplace has v$mkt_ver — run: claude plugin update wormhook@$mkt [silence: WORMHOOK_SKIP_DRIFT=1]"
     fi
     ;;
 esac
 
+# One 🟡, then each item on its own line (a checklist). Newlines are literal \n escapes in
+# the hand-rolled JSON string — safe because every fragment is static (see header invariant).
 [[ -z "$missing" ]] && exit 0
-printf '{"systemMessage":"🟡 [wormhook] %s"}\n' "$missing"
+printf '{"systemMessage":"🟡 [wormhook] setup notes (each line silenceable — see [silence: …]):\\n%s"}\n' "$missing"
 exit 0

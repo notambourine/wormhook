@@ -245,6 +245,11 @@ esac
 # remediation steps below are themselves Bash, so it would lock the user out of fixing
 # the machine.
 ALERTS="" SUMMARY=""
+# Machine-readable findings (NDJSON, one {title,body} per alert), slurped into the
+# `findings` array on the SessionStart/PostToolUse verdict. This is the structured
+# contract the out-of-band CLI consumes instead of screen-scraping ALERTS/SUMMARY —
+# rewording a banner no longer silently breaks the adapter's parsing/dedup.
+FINDINGS=""
 # Degraded-but-not-infected conditions (scan timeouts etc). A run with warnings
 # reports 🟡 instead of 🟢 and never refreshes the clean-scan cache — a truncated
 # scan is not a clean scan.
@@ -264,6 +269,7 @@ EOF
 )
   ALERTS="${ALERTS}${block}"$'\n'
   SUMMARY="${SUMMARY}• ${1}"$'\n'
+  FINDINGS="${FINDINGS}$(jq -nc --arg t "$1" --arg b "$2" '{title:$t,body:$b}')"$'\n'
   if [[ "$MODE" == "pre_tool" ]]; then
     # Hard block on the actual npm/node command. permissionDecision:"deny" blocks it;
     # systemMessage shows the 🚨 to the USER directly at block time (exit-2's stderr
@@ -779,7 +785,12 @@ fi
 if [[ "$MODE" != "pre_tool" && -n "$ALERTS" ]]; then
   evname="SessionStart"; [[ "$MODE" == "post_tool" ]] && evname="PostToolUse"
   count=$(printf '%s' "$SUMMARY" | grep -c '•')
-  jq -n --arg ctx "$ALERTS" --arg sum "$SUMMARY" --arg ev "$evname" --arg n "$count" '{
+  findings_json=$(printf '%s' "$FINDINGS" | jq -sc .)
+  # Top-level `verdict` + `findings` are the machine-readable contract (extra keys are
+  # ignored by Claude Code); systemMessage/additionalContext remain the human channels.
+  jq -n --arg ctx "$ALERTS" --arg sum "$SUMMARY" --arg ev "$evname" --arg n "$count" --argjson findings "$findings_json" '{
+    verdict: "red",
+    findings: $findings,
     systemMessage: ("🚨 wormhook: " + $n + " critical supply-chain IOC(s) detected in this repo.\nDo NOT run npm/node installs until resolved:\n" + $sum + "\nSee the assistant message for full remediation steps."),
     hookSpecificOutput: {
       hookEventName: $ev,
@@ -809,12 +820,12 @@ if [[ -z "$ALERTS" ]]; then
   if [[ -n "$WARNINGS" ]]; then
     # A degraded pass speaks on EVERY event, including prompt_submit — a silently degraded
     # continuous monitor is the invisibility bug all over again.
-    jq -nc --arg msg "🟡 [wormhook] passed with caveats ($SCOPE) — $WARNINGS" '{systemMessage: $msg}'
+    jq -nc --arg msg "🟡 [wormhook] passed with caveats ($SCOPE) — $WARNINGS" '{verdict: "yellow", systemMessage: $msg}'
   elif [[ "$MODE" != "prompt_submit" ]]; then
     # Clean 🟢 is suppressed for prompt_submit ONLY: it fires every human turn, so a 🟢 each
     # time would spam the transcript. Like doctor.sh, the continuous monitor stays silent when
     # healthy and speaks only on a finding (🚨 block above) or degradation (🟡 above).
-    jq -nc --arg msg "🟢 [wormhook] clean ($SCOPE)" '{systemMessage: $msg}'
+    jq -nc --arg msg "🟢 [wormhook] clean ($SCOPE)" '{verdict: "green", systemMessage: $msg}'
   fi
 fi
 

@@ -14,6 +14,9 @@ that aren't obvious from the code.
   (must parse identically under bash and zsh).
 - `scripts/doctor.sh` — silent-unless-degraded SessionStart health check (wormhook deps +
   version drift + a nudge to install the ceded install-firewall layer: Socket Firewall, `vet`).
+- `scripts/wormhook-scan.sh` — the **out-of-band CLI** (+ `…conf.sample`). Drives the engine
+  from any shell for fleet checks, an hourly launchd sweep, and a global git hook. See
+  "Out-of-band adapters" below.
 - `hooks/hooks.json` — event → script wiring. `.claude-plugin/{plugin,marketplace}.json` — manifests.
 
 ## Invariants (don't break these)
@@ -99,6 +102,51 @@ one source — that spawns the script on every command; the latency tax isn't wo
 **`UserPromptSubmit` is exempt** from `if ⊇ regex`: a UPS payload carries no command, so its
 `hooks.json` entry has **no `if` and no matcher** — it fires every prompt by design, and the
 script gates it purely on `EVENT`. There's no command-class regex to keep it in sync with.
+
+## Out-of-band adapters (`wormhook-scan.sh`)
+
+The Claude hook is **one trigger, not the engine**. `wormhook-scan.sh` adds the non-Claude
+triggers (manual fleet `scan`, hourly launchd sweep, global git hook, opt-in shell exec-guard;
+verbs `scan`/`check`/`git-hook`/`shell-init`/`install-*`/`status`/`config`). The user-facing
+installer is the `/wormhook-setup` slash command (`commands/wormhook-setup.md`), which the
+`SessionStart` doctor coverage line points at. `doctor.sh` emits a per-item checklist; each
+soft nudge is silenceable via `WORMHOOK_SKIP_{RG,SFW,VET,COVERAGE,DRIFT}=1` (or
+`WORMHOOK_DOCTOR_QUIET=1` for all), set in repo/user `settings.json` `env` — but the jq
+"scans are OFF" alarm is intentionally **not** silenceable. These invariants hold:
+
+- **Adapters never duplicate detection.** Every verb drives the *unchanged* `wormhook.sh` by
+  synthesizing the same stdin payload Claude sends — `SessionStart` for fast (T0+T1, T2 on
+  cache-miss), `PostToolUse`+`npm install` for `--deep` (forces T2). All signatures live in
+  `malware-patterns.sh`; the CLI's only added logic is *orchestration* (repo discovery, the
+  global-persistence dedup, exit codes). If you are tempted to add a pattern/grep to the CLI,
+  it belongs in `malware-patterns.sh` instead — same DRY rule as the tiers.
+- **Same injection rule as the engine.** Paths reach the engine only through `jq -n --arg`
+  payloads; nothing untrusted is string-interpolated (mirrors the `wormhook.sh` `jq --arg`
+  invariant). The launchd plist escapes every value via `_xml`.
+- **The git hook must never self-flag.** Its body calls only the local CLI — no `curl|…|sh`,
+  no `MALWARE_DROPPER_TOKENS_RE` strings — so the engine's MALICIOUS-GIT-HOOK Tier-0 check
+  does not trip on it. Verified by test; keep the hook body clean if you touch `_hook_block`.
+- **Installers are opt-in, idempotent, non-clobbering, reversible.** `install-git-hook`
+  cooperates with an existing `core.hooksPath` and appends a `# >>> wormhook >>>` marker block
+  to a pre-existing hook (never overwrites); `uninstall-git-hook` removes only that block.
+  launchd label is `com.notambourine.wormhook-sweep` (org-namespaced; not in any IOC set).
+- **Discovery, not glob-literal.** A scan path resolves to the git repo(s) at/under it
+  (`node_modules` pruned); a `node_modules`/`dist` dir is never scanned *as a project* (the
+  engine's `!node_modules` exclusion can't fire when that dir is the CWD root). `--literal`
+  bypasses discovery for an arbitrary dir.
+- **Config is per-machine, never hardcoded** (team-distributable): roots come from
+  `$WORMHOOK_SCAN_ROOTS` or `${XDG_CONFIG_HOME:-~/.config}/wormhook/scan-roots`; the in-repo
+  `wormhook-scan.conf.sample` is the seed for `config --init`.
+- **Exec-guard layering = git hook *warns*, shell-init *blocks*.** The git hook is a post-op
+  reporter (loud, human-in-the-loop — it cannot block files that already landed). `shell-init`
+  is the opt-in enforcement: the out-of-Claude analog of the `PreToolUse` block. It is scoped
+  to the JS package managers (`npm/pnpm/yarn/bun/npx`) **deliberately not `node`** (too hot a
+  path — latency + version-manager breakage), is `command`-based so it never self-recurses,
+  fails open if the CLI is absent, and must be loaded **after** nvm/asdf (it defines shell
+  functions). Do not promote it from opt-in to auto-installed, and do not add `node`.
+- Editing `wormhook-scan.sh` (or `commands/wormhook-setup.md`) is a behavior change →
+  **bump `plugin.json`** (CI tripwire) and `wormhook-scan.sh` is covered by the
+  `shellcheck -S warning scripts/*.sh` step.
 
 ## Working here
 

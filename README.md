@@ -39,6 +39,69 @@ dependency is missing, the installed copy lags the marketplace, or a recommended
 [companion firewall](#beyond-the-tiers) (Socket Firewall / `vet`) isn't installed — each
 with the one-liner to fix it.
 
+## Run it outside Claude
+
+The Claude hook only fires inside a Claude Code session. `wormhook-scan` runs the **same
+engine** (Tiers 0–2, same `malware-patterns.sh`) from any shell — for the moments Claude
+is not watching: a `git pull` in a plain terminal, coming back to the machine after a
+while, or a morning fleet check. It is a thin adapter: no detection logic is duplicated,
+so every signature update reaches it for free.
+
+The fastest way to set it all up is from inside Claude Code: **`/wormhook-setup`** runs an
+interactive installer (it asks which pieces you want and wires them) — the `SessionStart`
+doctor points you to it. Or do it by hand:
+
+```bash
+# link wormhook-scan onto your PATH (~/.local/bin)
+bash "$(claude plugin root wormhook 2>/dev/null || echo .)/scripts/wormhook-scan.sh" install-cli
+
+wormhook-scan ~/code/*/            # scan every git repo under ~/code (node_modules pruned)
+wormhook-scan                      # no args -> roots from your config (see below)
+wormhook-scan --deep ~/code/myapp  # force the Tier-2 node_modules walk
+wormhook-scan --persistence        # only the machine-wide ($HOME) persistence checks
+```
+
+Each path resolves to the **git repo(s)** at or under it (an org dir of repos expands to
+its repos; `node_modules` is pruned), so you point at parents, not individual repos. A
+machine-wide persistence finding (a poisoned `~/.claude`, a rogue LaunchAgent) is reported
+**once** at the top, not repeated per repo. Exit code: `0` clean · `1` critical (or machine
+persistence) · `2` degraded — so it gates a script or CI step.
+
+**Config (team-shareable, per-machine roots).** With no path args, `wormhook-scan` reads
+newline-delimited paths/globs from `${XDG_CONFIG_HOME:-~/.config}/wormhook/scan-roots`
+(or `$WORMHOOK_SCAN_ROOTS`). `wormhook-scan config --init` seeds a commented sample to edit.
+
+**Two automatic triggers (opt-in, both local, zero tokens):**
+
+```bash
+wormhook-scan install-launchd            # hourly background sweep (macOS launchd)
+                                         #   notifies + logs; --every SECONDS to retune
+wormhook-scan install-git-hook           # post-merge/checkout/rewrite audit on EVERY
+                                         #   `git pull` in ANY terminal (not just Claude)
+```
+
+`install-launchd` is the right answer to "scan the machine while I am away" — a native
+LaunchAgent runs `wormhook-scan` on a timer with **no Claude session and no LLM tokens**
+(a cloud-scheduled agent could not see your local filesystem anyway). `install-git-hook`
+cooperates with an existing `core.hooksPath` and never clobbers a hook you already have: on
+every `git pull`/`checkout` it prints a **loud report of what the update changed plus any
+IOC**, so you see it before you run `npm run dev`. (`wormhook-scan status` shows what is
+installed; `uninstall-launchd` / `uninstall-git-hook` reverse cleanly. On Linux,
+`install-launchd` prints a systemd-timer / cron line instead.)
+
+**Optional exec-guard — block, don't just warn.** The git hook *warns*; a post-merge hook
+cannot stop files that already landed. To actually refuse to *run* on a compromised repo
+outside Claude — the out-of-session analog of the `PreToolUse` block — opt into a shell guard:
+
+```bash
+eval "$(wormhook-scan shell-init)"   # in ~/.zshrc/.bashrc, AFTER any nvm/asdf
+```
+
+It wraps `npm`/`pnpm`/`yarn`/`bun`/`npx` (not `node`) so they fast-scan the current repo and
+**refuse** if it trips the engine — catching even IOCs that arrived without a git pull (a
+fresh clone, a poisoned transitive dep). It is a tripwire, not a sandbox (`command npm` or a
+direct `./node_modules/.bin/…` bypasses it) and fails open if `wormhook-scan` is absent.
+
 ## How it works
 
 The scan is **tiered by cost × volatility**, so the expensive part only runs when it
@@ -145,6 +208,10 @@ flowchart TD
 | `PostToolUse` | after a working-tree-rewriting `git` op (`pull`/`merge`/`checkout`/`switch`/`rebase`) | Tier 0–1 on the new tree (+ Tier 2 on dep drift); warns on a hit. Catches persistence/source IOCs that arrive over git with **no npm involved** |
 | `UserPromptSubmit` | every human turn | Tier 0–1 ([continuous monitor](#beyond-the-tiers)); **blocks** on a hit (`decision: "block"`). Silent when clean |
 | `SessionStart` | on launch | Tier 0–1 (+ Tier 2 on a stale cache); warns on a hit |
+
+These five are the *Claude-session* triggers. The same tiers also run outside Claude via
+[`wormhook-scan`](#run-it-outside-claude) — on demand, on an hourly LaunchAgent, or on every
+`git pull` through a git hook.
 
 **The hard blocks are at `PreToolUse` and `UserPromptSubmit`** — they stop the command/turn
 regardless of whether the model cooperates (`permissionDecision: "deny"` and a top-level

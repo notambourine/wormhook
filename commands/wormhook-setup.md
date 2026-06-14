@@ -56,3 +56,44 @@ common roots (`~/code`, `~/sandbox/git-repos`, `~/work`) plus "Other" for a cust
 Run `bash "$SCRIPT" status` again and summarize what changed plus how to reverse each piece
 (`uninstall-git-hook`, `uninstall-launchd`, or remove the `~/.local/bin` symlink). Keep the
 whole interaction concise; never install anything the user did not pick.
+
+## 5. Optional: shell exec-guard (manual, paste-only)
+
+The git hook *warns* after a pull; the exec-guard **refuses to run** `npm`/`pnpm`/`yarn`/`bun`/`npx`
+in a repo with a live IOC — the out-of-Claude analog of the `PreToolUse` block. It is **opt-in and
+paste-only**: it defines shell functions in the user's rc, which this wizard does **not** edit (per
+wormhook's no-auto-install rule). Offer to *print* the block; the user pastes it into
+`~/.zshrc`/`~/.bashrc` **after** any version manager (nvm/fnm/asdf). Skip if they decline.
+
+Detect Socket Firewall and print the matching block:
+
+```bash
+command -v sfw >/dev/null 2>&1 && echo sfw-present || echo sfw-absent
+```
+
+- **sfw absent** — the standalone guard:
+  ```bash
+  eval "$(wormhook-scan shell-init)"
+  ```
+- **sfw present** — compose them in ONE wrapper chain (wormhook guard → sfw → real binary). Do
+  **not** also keep a separate `npm() { sfw npm … }` block: two blocks defining the same name
+  silently clobber each other (last loaded wins), disabling a layer. Paste this single block,
+  loaded last:
+  ```bash
+  command -v wormhook-scan >/dev/null 2>&1 && eval "$(wormhook-scan shell-init)"  # defines _wormhook_guard
+  _sc_run() {
+    local pm="$1"; shift
+    command -v _wormhook_guard >/dev/null 2>&1 && { _wormhook_guard || return 1; }
+    if command -v sfw >/dev/null 2>&1; then command sfw "$pm" "$@"; else command "$pm" "$@"; fi
+  }
+  npm()  { _sc_run npm  "$@"; }
+  pnpm() { _sc_run pnpm "$@"; }
+  yarn() { _sc_run yarn "$@"; }
+  bun()  { _sc_run bun  "$@"; }
+  npx()  { _sc_run npx  "$@"; }
+  ```
+
+Every layer fails open to the real binary, so a missing sfw or wormhook-scan never bricks the
+command — sfw is the *preferred* layer, never an assumed one (it can vanish on a version-manager
+node switch). Note it is a tripwire, not a sandbox: `command npm` or `./node_modules/.bin/…`
+bypasses it.

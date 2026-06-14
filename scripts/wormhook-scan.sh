@@ -369,6 +369,11 @@ TXT
   # bash 3.2 (Apple /bin/bash) aborts on "${paths[@]}" when paths is an empty array
   # under `set -u` — and no-PATHS is the default form (config/env roots). Guard the append.
   [[ ${#paths[@]} -gt 0 ]] && args+=("${paths[@]}")
+  # Render to a temp file first so we can lint + diff before touching the live plist.
+  # A bootout->bootstrap cycle re-registers the agent, which re-fires macOS's
+  # "App Background Activity" toast — so when nothing changed and it is already
+  # loaded, we leave the live item untouched and skip the reload entirely.
+  local uid tmp; uid="$(id -u)"; tmp="$plist.tmp.$$"
   { printf '<?xml version="1.0" encoding="UTF-8"?>\n'
     printf '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
     printf '<plist version="1.0"><dict>\n'
@@ -381,15 +386,26 @@ TXT
     printf '  <key>StandardOutPath</key><string>%s</string>\n' "$(_xml "$SWEEP_LOG")"
     printf '  <key>StandardErrorPath</key><string>%s</string>\n' "$(_xml "$SWEEP_LOG")"
     printf '</dict></plist>\n'
-  } > "$plist"
-  command -v plutil >/dev/null 2>&1 && ! plutil -lint "$plist" >/dev/null 2>&1 && _die "generated plist failed plutil -lint: $plist"
-  if [[ "$noload" == 1 ]]; then echo "wrote (not loaded): $plist"; return 0; fi
-  launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
-  if launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null; then
+  } > "$tmp"
+  if command -v plutil >/dev/null 2>&1 && ! plutil -lint "$tmp" >/dev/null 2>&1; then
+    command rm -f "$tmp"; _die "generated plist failed plutil -lint: $tmp"
+  fi
+  if [[ "$noload" == 1 ]]; then mv -f "$tmp" "$plist"; echo "wrote (not loaded): $plist"; return 0; fi
+  # Idempotent reload: if the rendered plist is byte-identical to the live one AND
+  # the agent is already registered, do nothing — no bootout/bootstrap, no toast.
+  if cmp -s "$tmp" "$plist" 2>/dev/null && launchctl print "gui/$uid/$LABEL" >/dev/null 2>&1; then
+    command rm -f "$tmp"
+    echo "already current + loaded: $plist (every ${every}s)"
+    echo "log: $SWEEP_LOG"
+    return 0
+  fi
+  mv -f "$tmp" "$plist"
+  launchctl bootout "gui/$uid/$LABEL" >/dev/null 2>&1 || true
+  if launchctl bootstrap "gui/$uid" "$plist" 2>/dev/null; then
     echo "installed + loaded: $plist (every ${every}s)"
   else
     echo "wrote $plist but launchctl bootstrap failed — load manually:"
-    echo "  launchctl bootstrap gui/$(id -u) \"$plist\""
+    echo "  launchctl bootstrap gui/$uid \"$plist\""
   fi
   echo "log: $SWEEP_LOG"
 }

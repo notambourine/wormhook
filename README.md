@@ -145,6 +145,31 @@ firewall layer it deliberately doesn't reimplement:
   doctor nudges you (once, silently if present) to install them — "run alongside, not
   instead." `sfw` is the direct answer to "stop me installing a poisoned version."
 
+### Blast-radius exposure audit (opt-in)
+
+Detection always has a false-negative rate. The **blast-radius** layer is the only one that
+helps *after* a successful exfil: how bad is it when we miss? Most of that is environmental and
+lives outside this tool (sandbox the agent's credential context; fine-grained/expiring tokens;
+hardware-held SSH keys; secrets-manager injection over `.env`). The one slice wormhook is
+positioned to own is a read-only, advisory **posture check** — it already runs at `SessionStart`
+and already encodes the exact paths the worms harvest.
+
+Opt in by exporting `WORMHOOK_POSTURE_AUDIT=1` (in your shell, or a repo/user
+`settings.json` `"env"`). The `SessionStart` doctor then prints a machine-specific punch list of
+**long-lived secrets sitting in worm-targeted paths** — what would get exfiltrated if you're hit:
+
+- **Passphrase-less SSH private keys** (detected via `ssh-keygen -y -P ''`, which catches the new
+  OpenSSH key format that grepping for `ENCRYPTED` misses) — and names the specific key files.
+- **Plaintext GitHub tokens** — a classic `ghp_` PAT (non-expiring by default) or `gho_` OAuth
+  token in `~/.git-credentials`, the `gh` config, or `GH_TOKEN`/`GITHUB_TOKEN`.
+- **A `.env` in the repo with a live-looking secret** — gated on a real credential *shape* (AWS
+  `AKIA…`, GitHub/OpenAI/Google keys, a PEM block), not merely a `KEY=` line, to stay near-zero-FP.
+
+It is **advisory only and never blocks** (posture is not an IOC), defaults **off**, and stays
+silent when it finds nothing. It is deliberately capped at this one checklist — see
+[the design note](#what-it-deliberately-doesnt-do) on why credential-*posture management* is a
+different job from malware detection.
+
 ```mermaid
 flowchart TD
     A([SessionStart<br/>on launch]):::evt

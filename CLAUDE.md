@@ -13,7 +13,9 @@ that aren't obvious from the code.
   the hook. Add a campaign here once and every tier picks it up. Extended-regex only
   (must parse identically under bash and zsh).
 - `scripts/doctor.sh` — silent-unless-degraded SessionStart health check (wormhook deps +
-  version drift + a nudge to install the ceded install-firewall layer: Socket Firewall, `vet`).
+  version drift + out-of-band coverage + a nudge to install the ceded install-firewall layer:
+  Socket Firewall, `vet`). Also hosts the **opt-in** blast-radius exposure audit
+  (`WORMHOOK_POSTURE_AUDIT`, default off) — advisory-only, never blocks (issue #15).
 - `scripts/wormhook-scan.sh` — the **out-of-band CLI** (+ `…conf.sample`). Drives the engine
   from any shell for fleet checks, an hourly launchd sweep, and a global git hook. See
   "Out-of-band adapters" below.
@@ -30,10 +32,16 @@ that aren't obvious from the code.
   shared-field / `$ref` mechanism, so a byte-identical copy is just drift waiting to happen — we
   deliberately gave each a distinct job instead, and there is **no parity check**. Edit whichever
   fits the surface; do not mirror one into the other.
-- **`doctor.sh` stays `jq`-free.** It's the watchdog for the case where `wormhook.sh`
-  can't run (missing `jq`), so it depends on nothing but bash. Its JSON is hand-rolled
-  and safe *only because every string is static* — don't interpolate dynamic content
-  without switching that line to `jq`.
+- **`doctor.sh` follows the hybrid jq model (KEY-DECISION 2026-06-13, supersedes the older
+  fully-jq-free rule).** The *one* line doctor must emit without `jq` — `jq missing — scans
+  are OFF` — is a hand-rolled static `printf` in an early-exit at the top of the file. That
+  alarm is the watchdog's whole reason to exist: if doctor itself needed `jq`, it would go
+  silent in the exact case it exists to catch (the "silent for a month" invisible-failure
+  bug). Everything *past* that early-exit only matters when `jq` is present (a jq-less machine
+  has no working scanner to nudge about), so it is built with `jq --arg`. That keeps the
+  output DRY (real newlines, no literal-`\n` bookkeeping) and makes interpolation injection-
+  safe — which is why the exposure audit can name the actual offending key files. Rule: the
+  jq-missing alarm stays static + dependency-free; every other line goes through `jq --arg`.
 - **`wormhook.sh` must route all scanned paths/commands through `jq --arg`.** It embeds
   untrusted filenames/commands into output; bare interpolation is an injection hole.
 - **Tier 0 always runs and is never cached.** A poisoned `~/.claude` hook re-runs every

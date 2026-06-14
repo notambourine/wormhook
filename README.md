@@ -84,8 +84,9 @@ wormhook-scan install-git-hook           # post-merge/checkout/rewrite audit on 
 LaunchAgent runs `wormhook-scan` on a timer with **no Claude session and no LLM tokens**
 (a cloud-scheduled agent could not see your local filesystem anyway). `install-git-hook`
 cooperates with an existing `core.hooksPath` and never clobbers a hook you already have: on
-every `git pull`/`checkout` it prints a **loud report of what the update changed plus any
-IOC**, so you see it before you run `npm run dev`. (`wormhook-scan status` shows what is
+every `git pull`/`checkout` it prints a one-line green **`🟢 … clean after git update`**
+confirmation, or a **loud report of what the update changed plus any IOC** on a finding, so you
+see it before you run `npm run dev`. (`wormhook-scan status` shows what is
 installed; `uninstall-launchd` / `uninstall-git-hook` reverse cleanly. On Linux,
 `install-launchd` prints a systemd-timer / cron line instead.)
 

@@ -120,6 +120,17 @@ one source — that spawns the script on every command; the latency tax isn't wo
 `hooks.json` entry has **no `if` and no matcher** — it fires every prompt by design, and the
 script gates it purely on `EVENT`. There's no command-class regex to keep it in sync with.
 
+**One hook object per event — never split into sibling entries (KEY-DECISION 2026-06-14).**
+Each event (`PreToolUse`/`PostToolUse`) registers **exactly one** hook object whose `if` is the
+*union* of every gated command class. Do **not** break it into one-object-per-class — sibling
+objects under the same `matcher` each fire independently (no cross-entry dedup), and Claude
+Code's `if` filter is **best-effort and fails open**: a compound/piped command it can't parse
+(`npm i | grep … ; npx … && echo`) bypasses every `if` and runs *all* siblings. Three
+PostToolUse objects → three duplicate scans + three 🟢 lines on one command (the N× bug fixed
+in 0.11.0). The single unioned object means fail-open can fire it at most once; `wormhook.sh`
+then re-derives the precise class internally to pick tiers. The `if ⊇ regex` invariant holds
+on the unioned glob: PostToolUse's `if` covers `INSTALL_RE ∪ GIT_RE ∪ PYINSTALL_RE`.
+
 ## Out-of-band adapters (`wormhook-scan.sh`)
 
 The Claude hook is **one trigger, not the engine**. `wormhook-scan.sh` adds the non-Claude

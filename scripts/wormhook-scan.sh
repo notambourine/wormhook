@@ -393,11 +393,11 @@ cmd_uninstall_git_hook() {
   local h f tmp
   for h in post-merge post-checkout post-rewrite; do
     f="$hookdir/$h"
-    [[ -f "$f" ]] && grep -q '# >>> wormhook >>>' "$f" || continue
+    { [[ -f "$f" ]] && grep -q '# >>> wormhook >>>' "$f"; } || continue
     tmp="$f.wh.$$"
     awk '/# >>> wormhook >>>/{s=1} !s{print} /# <<< wormhook <<</{s=0}' "$f" > "$tmp"
     # If only a bare shebang (or nothing) remains, drop the file entirely.
-    if [[ -z "$(grep -vE '^[[:space:]]*$|^#!' "$tmp")" ]]; then
+    if ! grep -qvE '^[[:space:]]*$|^#!' "$tmp"; then
       command rm -f "$f" "$tmp"; echo "removed (was wormhook-only): $f"
     else
       mv "$tmp" "$f"; chmod +x "$f"; echo "unwired: $f"
@@ -429,7 +429,7 @@ cmd_status() {
 }
 cmd_config() {
   case "${1:-}" in
-    --show) [[ -r "$CONFIG" ]] && cat "$CONFIG" || _die "no config at $CONFIG" 2 ;;
+    --show) if [[ -r "$CONFIG" ]]; then cat "$CONFIG"; else _die "no config at $CONFIG" 2; fi ;;
     --init|"")
       if [[ -e "$CONFIG" ]]; then echo "config exists: $CONFIG"; return 0; fi
       mkdir -p "$(dirname "$CONFIG")"
@@ -506,6 +506,7 @@ cmd_git_hook() {
     [[ -n "${changed:-}" ]] && printf '\n📋 files this update changed:\n%s\n' "$changed"
     printf '%s\n' "$(printf '%s' "$out" | _detail)"
     printf '\033[1;31m\n⚠  Do NOT run npm/node/dev in this repo until you have cleared the finding above.\033[0m\n'
+    # shellcheck disable=SC2016  # literal instruction text shown to the user, not an expansion
     printf '   (optional backstop: eval "$(wormhook-scan shell-init)" makes npm/pnpm refuse to run here automatically.)\n'
     return 1
   fi

@@ -12,14 +12,12 @@ that aren't obvious from the code.
 - `scripts/malware-patterns.sh` — **single source of truth** for signatures, sourced by
   the hook. Add a campaign here once and every tier picks it up. Extended-regex only
   (must parse identically under bash and zsh).
-- `scripts/doctor/*.sh` — the SessionStart health dashboard, **one focused check per file**, each
-  registered as its own SessionStart hook and each emitting **one** `🟢/🟡/🔴/⚪` status light
-  **every session** (issue #22, supersedes the old monolithic silent-unless-degraded `doctor.sh`):
-  `deps.sh` (jq hard + ripgrep soft — owns the jq-🔴 alarm), `firewall.sh` (the ceded Socket
-  Firewall + `vet` nudge), `coverage.sh` (out-of-band CLI/git-hook/launchd), `drift.sh` (version
-  drift), `exposure.sh` (always-on blast-radius audit — advisory-only, never blocks, issue #15).
-  `scripts/doctor/_utils.sh` is sourced by each (payload-free emit helpers `wh_emit`/`wh_flag`,
-  the `wh_silenced` skip-var logic, and the `wormhook-const.sh` load); it is sourced, not executed.
+- `scripts/doctor/*.sh` — the SessionStart health dashboard: **one focused check per file**, each
+  its own SessionStart hook emitting **one** `🟢/🟡/🔴/⚪` light **every session** (issue #22,
+  supersedes the old monolithic silent-unless-degraded `doctor.sh`). Each file's header says what
+  it checks; the **design contract** lives in `scripts/doctor/CLAUDE.md` — read it before adding or
+  editing a check. `_utils.sh` is sourced by each (emit helpers + `wh_silenced` + `wormhook-const.sh`
+  load); it is sourced, not executed.
 - `scripts/wormhook-scan.sh` — the **out-of-band CLI** (+ `…conf.sample`). Drives the engine
   from any shell for fleet checks, an hourly launchd sweep, and a global git hook. See
   "Out-of-band adapters" below.
@@ -47,9 +45,9 @@ that aren't obvious from the code.
   every non-deps check (deps.sh already shouted) with no per-file duplication. Everything past
   the guard uses `jq --arg`: DRY output (real newlines, no literal-`\n`) and injection-safe
   interpolation (why exposure can name the offending key files). **Because only `deps.sh` alarms,
-  a missing/corrupt `deps.sh` would silently disarm it — so a CI step asserts all six
-  `doctor/*.sh` exist + are executable and `deps.sh` is registered first in `hooks.json`, turning
-  that corruption case into a red PR.** Rule: the jq-missing alarm is static + `deps.sh`-only;
+  a missing/corrupt `deps.sh` would silently disarm it — so a CI step (deriving the check list
+  from `hooks.json`) asserts every registered `doctor/*.sh` exists + is executable and `deps.sh`
+  is first, turning that corruption case into a red PR.** Rule: the jq-missing alarm is static + `deps.sh`-only;
   every other line goes through `jq --arg`.
 - **`wormhook.sh` must route all scanned paths/commands through `jq --arg`.** It embeds
   untrusted filenames/commands into output; bare interpolation is an injection hole.

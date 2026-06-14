@@ -103,6 +103,20 @@ It wraps `npm`/`pnpm`/`yarn`/`bun`/`npx` (not `node`) so they fast-scan the curr
 fresh clone, a poisoned transitive dep). It is a tripwire, not a sandbox (`command npm` or a
 direct `./node_modules/.bin/…` bypasses it) and fails open if `wormhook-scan` is absent.
 
+**Already using Socket Firewall?** Don't keep a separate `npm() { sfw npm … }` block — it and the
+guard define the same names, so whichever loads last silently clobbers the other. Chain them in one
+wrapper (guard → `sfw` → real, each layer fail-open); `/wormhook-setup` prints the exact block:
+
+```bash
+eval "$(wormhook-scan shell-init)"   # defines _wormhook_guard
+_sc_run() {
+  local pm="$1"; shift
+  command -v _wormhook_guard >/dev/null 2>&1 && { _wormhook_guard || return 1; }
+  if command -v sfw >/dev/null 2>&1; then command sfw "$pm" "$@"; else command "$pm" "$@"; fi
+}
+for pm in npm pnpm yarn bun npx; do eval "${pm}() { _sc_run ${pm} \"\$@\"; }"; done; unset pm
+```
+
 ## How it works
 
 The scan is **tiered by cost × volatility**, so the expensive part only runs when it

@@ -20,6 +20,9 @@ that aren't obvious from the code.
   drift), `exposure.sh` (always-on blast-radius audit — advisory-only, never blocks, issue #15).
   `scripts/doctor/_utils.sh` is sourced by each (payload-free emit helpers `wh_emit`/`wh_flag`,
   the `wh_silenced` skip-var logic, and the `wormhook-const.sh` load); it is sourced, not executed.
+  **The status-light contract for this subtree lives in `scripts/doctor/CLAUDE.md`** (one
+  concern = one hook = one emit, no `systemMessage`/`additionalContext` concat; a light requires
+  an observable state) — read it before adding or extending a check.
 - `scripts/wormhook-scan.sh` — the **out-of-band CLI** (+ `…conf.sample`). Drives the engine
   from any shell for fleet checks, an hourly launchd sweep, and a global git hook. See
   "Out-of-band adapters" below.

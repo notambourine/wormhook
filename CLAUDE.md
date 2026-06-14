@@ -14,8 +14,8 @@ that aren't obvious from the code.
   (must parse identically under bash and zsh).
 - `scripts/doctor.sh` — silent-unless-degraded SessionStart health check (wormhook deps +
   version drift + out-of-band coverage + a nudge to install the ceded install-firewall layer:
-  Socket Firewall, `vet`). Also hosts the **opt-in** blast-radius exposure audit
-  (`WORMHOOK_POSTURE_AUDIT`, default off) — advisory-only, never blocks (issue #15).
+  Socket Firewall, `vet`). Also hosts the always-on blast-radius exposure audit —
+  advisory-only, never blocks, silent unless it finds something (issue #15).
 - `scripts/wormhook-scan.sh` — the **out-of-band CLI** (+ `…conf.sample`). Drives the engine
   from any shell for fleet checks, an hourly launchd sweep, and a global git hook. See
   "Out-of-band adapters" below.

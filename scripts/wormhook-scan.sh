@@ -32,10 +32,13 @@ done
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
 SELF="$SCRIPT_DIR/$(basename "$SOURCE")"
 ENGINE="$SCRIPT_DIR/wormhook.sh"
-LABEL="com.notambourine.wormhook-sweep"
 
 _die() { echo "wormhook-scan: $1" >&2; exit "${2:-1}"; }
 [[ -r "$ENGINE" ]] || _die "engine not found next to this script ($ENGINE)"
+# Shared launchd-label + git-hook-marker constants (single source; see wormhook-const.sh).
+# shellcheck source=scripts/wormhook-const.sh disable=SC1091
+. "$SCRIPT_DIR/wormhook-const.sh" 2>/dev/null || _die "constants not found ($SCRIPT_DIR/wormhook-const.sh)"
+LABEL="$WORMHOOK_LAUNCHD_LABEL"
 
 CONFIG="${WORMHOOK_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/wormhook/scan-roots}"
 SAMPLE="$SCRIPT_DIR/wormhook-scan.conf.sample"
@@ -381,14 +384,16 @@ cmd_uninstall_launchd() {
 
 # ══ install-git-hook ═════════════════════════════════════════════════════════════
 _hook_block() {
+  # Marker delimiters come from the shared constant (single source). The body must stay
+  # clean of dropper tokens so the engine's MALICIOUS-GIT-HOOK Tier-0 check never self-flags.
+  printf '%s\n' "$WORMHOOK_HOOK_MARKER"
   cat <<'BLOCK'
-# >>> wormhook >>>
 # Added by `wormhook-scan install-git-hook`. Out-of-band on-pull audit; fail-open.
 # Forward the hook name + git's args so the report can show the correct changed-file
 # range per hook (post-checkout passes <old> <new>; merge/rebase set ORIG_HEAD).
 command -v wormhook-scan >/dev/null 2>&1 && wormhook-scan git-hook "$(basename "$0")" "$@" || true
-# <<< wormhook <<<
 BLOCK
+  printf '%s\n' "$WORMHOOK_HOOK_MARKER_END"
 }
 cmd_install_git_hook() {
   local hookdir; hookdir="$(git config --global --get core.hooksPath 2>/dev/null || true)"
@@ -405,7 +410,7 @@ cmd_install_git_hook() {
     if [[ ! -f "$f" ]]; then
       { printf '#!/usr/bin/env bash\n'; _hook_block; } > "$f"
       chmod +x "$f"; echo "created: $f"
-    elif grep -q '# >>> wormhook >>>' "$f"; then
+    elif grep -qF "$WORMHOOK_HOOK_MARKER" "$f"; then
       echo "ok (already wired): $f"
     else
       { printf '\n'; _hook_block; } >> "$f"
@@ -420,9 +425,11 @@ cmd_uninstall_git_hook() {
   local h f tmp
   for h in post-merge post-checkout post-rewrite; do
     f="$hookdir/$h"
-    { [[ -f "$f" ]] && grep -q '# >>> wormhook >>>' "$f"; } || continue
+    { [[ -f "$f" ]] && grep -qF "$WORMHOOK_HOOK_MARKER" "$f"; } || continue
     tmp="$f.wh.$$"
-    awk '/# >>> wormhook >>>/{s=1} !s{print} /# <<< wormhook <<</{s=0}' "$f" > "$tmp"
+    # Strip the marker..end block (exact string compare on $0 — robust to chars in the marker).
+    awk -v o="$WORMHOOK_HOOK_MARKER" -v c="$WORMHOOK_HOOK_MARKER_END" \
+      '$0==o{s=1} !s{print} $0==c{s=0}' "$f" > "$tmp"
     # If only a bare shebang (or nothing) remains, drop the file entirely.
     if ! grep -qvE '^[[:space:]]*$|^#!' "$tmp"; then
       command rm -f "$f" "$tmp"; echo "removed (was wormhook-only): $f"
@@ -450,7 +457,7 @@ cmd_status() {
   if [[ -n "$hookdir" ]]; then
     local _n=0 _h
     for _h in post-merge post-checkout post-rewrite; do
-      [[ -f "$hookdir/$_h" ]] && grep -q '# >>> wormhook >>>' "$hookdir/$_h" 2>/dev/null && _n=$((_n+1))
+      [[ -f "$hookdir/$_h" ]] && grep -qF "$WORMHOOK_HOOK_MARKER" "$hookdir/$_h" 2>/dev/null && _n=$((_n+1))
     done
     if [[ "$_n" == 3 ]]; then echo "git hook: installed in $hookdir (3/3 hooks)"
     elif [[ "$_n" -gt 0 ]]; then echo "git hook: PARTIAL ($_n/3 in $hookdir) — re-run install-git-hook"

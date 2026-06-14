@@ -34,6 +34,13 @@ QUIET="${WORMHOOK_DOCTOR_QUIET:-}"
 # soft <skip-var-value> <message>: record a silenceable nudge unless its skip var (or QUIET) is set.
 soft() { [[ -n "$QUIET" || -n "$1" ]] && return 0; note "$2"; }
 
+# Shared launchd-label + git-hook-marker constants (single source — see wormhook-const.sh),
+# so the coverage probe below detects exactly what wormhook-scan.sh installs. Pure assignments,
+# no jq — preserves this file's jq-free / dependency-light invariant. If absent (corrupt
+# install), the constants stay unset and the coverage block self-skips (the jq alarm still runs).
+# shellcheck source=scripts/wormhook-const.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/wormhook-const.sh" 2>/dev/null || true
+
 # jq: hard dependency — without it the scanner is OFF, not degraded. Not silenceable.
 command -v jq &>/dev/null || \
   note "jq missing — scans are OFF (brew install jq)"
@@ -63,6 +70,8 @@ command -v vet &>/dev/null || \
 # fixed glyphs chosen by a conditional — no untrusted content is interpolated, so the
 # jq-free / static-string invariant above still holds (the hooksPath VALUE is only used
 # for a file test, never printed).
+# Self-skip if the shared constants did not load (corrupt install): the jq alarm still runs.
+if [[ -n "${WORMHOOK_HOOK_MARKER:-}" && -n "${WORMHOOK_LAUNCHD_LABEL:-}" ]]; then
 _cli=✗; command -v wormhook-scan &>/dev/null && _cli=✓
 # git-hook is ✓ only when ALL THREE hooks the installer writes carry the marker —
 # checking just post-merge would report full coverage on a partial/corrupted install.
@@ -71,17 +80,18 @@ _hd=$(git config --global --get core.hooksPath 2>/dev/null); _hd="${_hd/#\~/$HOM
 if [[ -n "$_hd" ]]; then
   _hk=0
   for _h in post-merge post-checkout post-rewrite; do
-    [[ -f "$_hd/$_h" ]] && grep -q '>>> wormhook >>>' "$_hd/$_h" 2>/dev/null && _hk=$((_hk+1))
+    [[ -f "$_hd/$_h" ]] && grep -qF "$WORMHOOK_HOOK_MARKER" "$_hd/$_h" 2>/dev/null && _hk=$((_hk+1))
   done
   [[ "$_hk" == 3 ]] && _hook=✓
 fi
 if [[ "$(uname -s)" == "Darwin" ]]; then
-  _sweep=✗; launchctl print "gui/$(id -u)/com.notambourine.wormhook-sweep" &>/dev/null && _sweep=✓
+  _sweep=✗; launchctl print "gui/$(id -u)/$WORMHOOK_LAUNCHD_LABEL" &>/dev/null && _sweep=✓
 else
   _sweep="n/a"
 fi
 if [[ "$_cli" == "✗" || "$_hook" == "✗" || "$_sweep" == "✗" ]]; then
   soft "${WORMHOOK_SKIP_COVERAGE:-}" "out-of-band coverage — CLI:$_cli git-hook:$_hook hourly-sweep:$_sweep — run /wormhook-setup in Claude to finish [silence: WORMHOOK_SKIP_COVERAGE=1]"
+fi
 fi
 
 # Version drift: a `/plugin` marketplace refresh updates the clone but NOT the

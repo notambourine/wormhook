@@ -53,19 +53,35 @@ _scan_one() {  # $1=dir  $2=fast|deep
   fi
   printf '%s' "$payload" | bash "$ENGINE" 2>/dev/null
 }
-_glyph() {  # stdin: engine JSON -> 🟢/🟡/🚨
-  local sm; sm=$(jq -r '.systemMessage // ""' 2>/dev/null)
-  case "$sm" in
-    "🚨"*) printf '🚨' ;;
-    "🟡"*) printf '🟡' ;;
-    "🟢"*) printf '🟢' ;;
-    *)     printf '🟡' ;;   # no/garbled verdict => degraded, never silently green
-  esac
+_glyph() {  # stdin: engine JSON -> 🟢/🟡/🚨. Prefer the machine-readable `verdict`; fall back
+            # to the systemMessage glyph prefix (older engine output / version drift). A
+            # missing/garbled verdict resolves to 🟡 — degraded, never silently green.
+  local g
+  g=$(jq -r '
+    (.verdict // "") as $v
+    | if   $v=="red"    then "🚨"
+      elif $v=="yellow" then "🟡"
+      elif $v=="green"  then "🟢"
+      else (.systemMessage // "") as $m
+        | if   ($m|startswith("🚨")) then "🚨"
+          elif ($m|startswith("🟡")) then "🟡"
+          elif ($m|startswith("🟢")) then "🟢"
+          else "🟡" end
+      end' 2>/dev/null)
+  case "$g" in "🚨"|"🟡"|"🟢") printf '%s' "$g" ;; *) printf '🟡' ;; esac
 }
 # Alert TITLEs from a verdict (one per line). Block titles render as "🚨  TITLE" at
 # line-start inside additionalContext; the systemMessage uses a single space, so this
 # matches blocks only. Titles are clean strings (no globs) => safe for set membership.
-_titles() { jq -r '.hookSpecificOutput.additionalContext // ""' 2>/dev/null | grep '^🚨  ' | sed 's/^🚨  //'; }
+_titles() {  # finding titles, one per line. Prefer structured .findings[].title; fall back
+             # to scraping the additionalContext banner (older engine output / version drift).
+  local j; j=$(cat)
+  if printf '%s' "$j" | jq -e '(.findings // []) | length > 0' >/dev/null 2>&1; then
+    printf '%s' "$j" | jq -r '.findings[].title'
+  else
+    printf '%s' "$j" | jq -r '.hookSpecificOutput.additionalContext // ""' 2>/dev/null | grep '^🚨  ' | sed 's/^🚨  //'
+  fi
+}
 _detail() { jq -r '.hookSpecificOutput.additionalContext // .systemMessage // ""' 2>/dev/null; }
 _msg_tail() {  # short one-liner for the table: first alert title, or the warn caveat
   local j="$1" t

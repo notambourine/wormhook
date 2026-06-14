@@ -527,7 +527,7 @@ USAGE
   wormhook-scan [PATHS...] [--deep|--fast] [--persistence] [--literal] [-q] [--notify] [--log F] [--json]
   wormhook-scan check [DIR] [-q]          # one-repo verdict (exec-guard primitive)
   wormhook-scan shell-init                # print opt-in npm/pnpm/yarn/bun/npx exec-guard
-  wormhook-scan git-hook                  # used by installed git hooks (loud on-pull report)
+  wormhook-scan git-hook                  # used by installed git hooks (🟢 line clean, loud banner on finding)
   wormhook-scan install-cli
   wormhook-scan install-launchd [--every SECONDS] [--no-load] [PATHS...]
   wormhook-scan install-git-hook
@@ -584,6 +584,9 @@ cmd_git_hook() {
     return "$EXIT_CRIT"
   fi
   [[ "$glyph" == "🟡" ]] && printf '%s' "$out" | _systemmsg
+  # Clean pass: one quiet green line so a no-finding pull still confirms the scan ran
+  # (deliberately a single line, no banner — the 🚨 path owns the loud surface).
+  [[ "$glyph" == "🟢" ]] && printf '\033[0;32m🟢 wormhook: %s clean after git update\033[0m\n' "${repo/#$HOME/~}"
   return "$EXIT_OK"
 }
 

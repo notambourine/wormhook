@@ -175,7 +175,7 @@ intentionally **not** silenceable. These invariants hold:
   functions). Do not promote it from opt-in to auto-installed, and do not add `node`.
 - Editing `wormhook-scan.sh` (or `commands/wormhook-setup.md`) is a behavior change →
   **bump `plugin.json`** (CI tripwire) and `wormhook-scan.sh` is covered by the
-  `shellcheck -S warning scripts/*.sh` step.
+  `shellcheck scripts/*.sh scripts/doctor/*.sh` step.
 
 ## Working here
 

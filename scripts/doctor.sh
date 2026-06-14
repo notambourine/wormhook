@@ -64,9 +64,17 @@ command -v vet &>/dev/null || \
 # jq-free / static-string invariant above still holds (the hooksPath VALUE is only used
 # for a file test, never printed).
 _cli=✗; command -v wormhook-scan &>/dev/null && _cli=✓
+# git-hook is ✓ only when ALL THREE hooks the installer writes carry the marker —
+# checking just post-merge would report full coverage on a partial/corrupted install.
 _hook=✗
 _hd=$(git config --global --get core.hooksPath 2>/dev/null); _hd="${_hd/#\~/$HOME}"
-[[ -n "$_hd" && -f "$_hd/post-merge" ]] && grep -q '>>> wormhook >>>' "$_hd/post-merge" 2>/dev/null && _hook=✓
+if [[ -n "$_hd" ]]; then
+  _hk=0
+  for _h in post-merge post-checkout post-rewrite; do
+    [[ -f "$_hd/$_h" ]] && grep -q '>>> wormhook >>>' "$_hd/$_h" 2>/dev/null && _hk=$((_hk+1))
+  done
+  [[ "$_hk" == 3 ]] && _hook=✓
+fi
 if [[ "$(uname -s)" == "Darwin" ]]; then
   _sweep=✗; launchctl print "gui/$(id -u)/com.notambourine.wormhook-sweep" &>/dev/null && _sweep=✓
 else

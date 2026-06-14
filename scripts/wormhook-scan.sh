@@ -420,8 +420,14 @@ cmd_status() {
     launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1 && echo "launchd:  loaded ($LABEL)" || echo "launchd:  not loaded (install-launchd)"
   fi
   local hookdir; hookdir="$(git config --global --get core.hooksPath 2>/dev/null || true)"; hookdir="${hookdir/#\~/$HOME}"
-  if [[ -n "$hookdir" && -f "$hookdir/post-merge" ]] && grep -q '# >>> wormhook >>>' "$hookdir/post-merge" 2>/dev/null; then
-    echo "git hook: installed in $hookdir"
+  if [[ -n "$hookdir" ]]; then
+    local _n=0 _h
+    for _h in post-merge post-checkout post-rewrite; do
+      [[ -f "$hookdir/$_h" ]] && grep -q '# >>> wormhook >>>' "$hookdir/$_h" 2>/dev/null && _n=$((_n+1))
+    done
+    if [[ "$_n" == 3 ]]; then echo "git hook: installed in $hookdir (3/3 hooks)"
+    elif [[ "$_n" -gt 0 ]]; then echo "git hook: PARTIAL ($_n/3 in $hookdir) — re-run install-git-hook"
+    else echo "git hook: not installed (install-git-hook)"; fi
   else
     echo "git hook: not installed (install-git-hook)"
   fi

@@ -536,7 +536,11 @@ cmd_shell_init() {
 # bypasses it) — a tripwire, not a sandbox. Fail-open if wormhook-scan is absent.
 _wormhook_guard() {
   command -v wormhook-scan >/dev/null 2>&1 || return 0
-  wormhook-scan check "$PWD" -q && return 0
+  # Exit codes: 0 clean · 1 critical (IOC) · 2 degraded. Block ONLY on 1 — a degraded
+  # scan (missing dep, timeout, unparseable verdict) must FAIL OPEN, not brick npm with
+  # a false "IOC" message. The engine is fail-open by design; the guard must match.
+  wormhook-scan check "$PWD" -q; local rc=$?
+  [ "$rc" -eq 1 ] || return 0
   printf '\033[1;31m⛔ wormhook blocked this command: supply-chain IOC in %s\n   run `wormhook-scan .` for detail; clear it before re-running.\033[0m\n' "$PWD" >&2
   return 1
 }

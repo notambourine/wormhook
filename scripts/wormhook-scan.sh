@@ -82,6 +82,13 @@ _titles() {  # finding titles, one per line. Prefer structured .findings[].title
     printf '%s' "$j" | jq -r '.hookSpecificOutput.additionalContext // ""' 2>/dev/null | grep '^🚨  ' | sed 's/^🚨  //'
   fi
 }
+# Per-finding identity keys (one base64 token per line) for the global-vs-local dedup.
+# Keyed on the FULL {title,body} — the body carries the matched path — NOT the class-level
+# title, so a real per-repo finding is never masked by a same-titled global finding (e.g. a
+# poisoned global core.hooksPath would otherwise collapse an identically-titled local
+# .git/hooks finding to 🟢). base64 keeps a multi-line body as a single grep -Fx token.
+# Empty for older engine output (no .findings) => every finding treated local (safe: never masks).
+_keys() { jq -r '(.findings // []) | .[] | (.title + "\u001f" + .body) | @base64' 2>/dev/null; }
 _detail() { jq -r '.hookSpecificOutput.additionalContext // .systemMessage // ""' 2>/dev/null; }
 _msg_tail() {  # short one-liner for the table: first alert title, or the warn caveat
   local j="$1" t
@@ -158,12 +165,14 @@ cmd_scan() {
   done
 
   # ── Global persistence pass (once): an empty CWD so only the $HOME/global T0 checks
-  #    fire. Its titles define "global"; per-repo blocks matching them are not repeated.
-  local gtmp gout gdetail global_titles
+  #    fire. Its finding KEYS define "global"; per-repo findings matching them are not
+  #    repeated. (Keys, not titles — see _keys: a class-level title would over-match.)
+  local gtmp gout gdetail global_titles global_keys
   gtmp=$(mktemp -d)
   gout=$(_scan_one "$gtmp" fast)
   rmdir "$gtmp" 2>/dev/null || command rm -rf "$gtmp" 2>/dev/null
   global_titles=$(printf '%s' "$gout" | _titles)
+  global_keys=$(printf '%s' "$gout" | _keys)
   gdetail=$(printf '%s' "$gout" | _detail)
   local had_global=0; [[ -n "$global_titles" ]] && had_global=1
 
@@ -215,20 +224,22 @@ cmd_scan() {
   local P_GLYPH=() P_DISP=() P_TAIL=() P_DETAIL=() NDJSON=""
   for d in "${ROOTS[@]}"; do
     i=$((i+1))
-    local out glyph disp tail rtitles localflag t
+    local out glyph disp tail rkeys localflag k
     out=$(_scan_one "$d" "$mode")
     glyph=$(printf '%s' "$out" | _glyph)
     disp="${d/#$HOME/~}"
     localflag=0
     if [[ "$glyph" == "🚨" ]]; then
-      rtitles=$(printf '%s' "$out" | _titles)
-      if [[ -z "$rtitles" ]]; then
+      # A 🚨 is "local" if ANY of its finding keys is not in the global set. Keys carry the
+      # matched path, so a per-repo finding never collapses into a same-titled global one.
+      rkeys=$(printf '%s' "$out" | _keys)
+      if [[ -z "$rkeys" ]]; then
         localflag=1
       else
-        while IFS= read -r t; do
-          [[ -z "$t" ]] && continue
-          printf '%s\n' "$global_titles" | grep -Fxq "$t" || localflag=1
-        done <<<"$rtitles"
+        while IFS= read -r k; do
+          [[ -z "$k" ]] && continue
+          printf '%s\n' "$global_keys" | grep -Fxq "$k" || localflag=1
+        done <<<"$rkeys"
       fi
     elif [[ "$glyph" == "🟡" ]]; then
       localflag=1

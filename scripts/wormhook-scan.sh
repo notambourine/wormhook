@@ -109,12 +109,6 @@ _render_verdict() {  # $1=engine JSON  $2=quiet(0/1)  -> echoes, returns EXIT_*
     *)    [[ "$quiet" == 1 ]] || printf '%s' "$out" | _systemmsg; return "$EXIT_OK" ;;
   esac
 }
-_msg_tail() {  # short one-liner for the table: first alert title, or the warn caveat
-  local j="$1" t
-  t=$(printf '%s' "$j" | _titles | head -n1)
-  [[ -n "$t" ]] && { printf '%s' "$t"; return; }
-  printf '%s' "$j" | jq -r '.systemMessage // ""' | sed 's/^🟡 \[wormhook\] //; s/^🟢 \[wormhook\] //' | head -n1
-}
 _notify() {  # title, message — argv-passed (never interpolated into AppleScript)
   command -v osascript >/dev/null 2>&1 || return 0
   osascript -e 'on run argv' -e 'display notification (item 2 of argv) with title (item 1 of argv)' \
@@ -243,10 +237,14 @@ cmd_scan() {
   local P_GLYPH=() P_DISP=() P_TAIL=() P_DETAIL=() NDJSON=""
   for d in "${ROOTS[@]}"; do
     i=$((i+1))
-    local out glyph disp tail rkeys localflag k
+    local out glyph disp tail rtitles rkeys localflag k
     out=$(_scan_one "$d" "$mode")
     glyph=$(printf '%s' "$out" | _glyph)
     disp="${d/#$HOME/~}"
+    # Parse titles once per repo — reused by the table tail and --json. Skipped on a clean,
+    # non-json repo where nothing reads them (avoids a jq fork per green repo on a sweep).
+    rtitles=""
+    [[ "$glyph" == "🚨" || "$json" == 1 ]] && rtitles=$(printf '%s' "$out" | _titles)
     localflag=0
     if [[ "$glyph" == "🚨" ]]; then
       # A 🚨 is "local" if ANY of its finding keys is not in the global set. Keys carry the
@@ -265,7 +263,10 @@ cmd_scan() {
     fi
     # Collapse "🚨 but only global findings" to locally-clean (global shown once up top).
     [[ "$glyph" == "🚨" && "$localflag" == 0 ]] && glyph="🟢"
-    tail=$(_msg_tail "$out")
+    # Table tail: first finding title, else the cleaned status-line caveat — from the titles
+    # already parsed above, not a second _titles pass.
+    tail=$(printf '%s' "$rtitles" | head -n1)
+    [[ -n "$tail" ]] || tail=$(printf '%s' "$out" | _systemmsg | sed 's/^🟡 \[wormhook\] //; s/^🟢 \[wormhook\] //' | head -n1)
 
     case "$glyph" in
       "🚨") r=$((r+1)); P_DETAIL+=("$disp"$'\x1f'"$(printf '%s' "$out" | _detail)") ;;
@@ -274,7 +275,7 @@ cmd_scan() {
     esac
     P_GLYPH+=("$glyph"); P_DISP+=("$disp"); P_TAIL+=("$tail")
     if [[ "$json" == 1 ]]; then
-      NDJSON+="$(jq -nc --arg p "$d" --arg s "$glyph" --argjson f "$(printf '%s' "$out" | _titles | jq -R . | jq -sc .)" '{path:$p,status:$s,findings:$f}')"$'\n'
+      NDJSON+="$(jq -nc --arg p "$d" --arg s "$glyph" --argjson f "$(printf '%s' "$rtitles" | jq -Rsc 'split("\n")|map(select(length>0))')" '{path:$p,status:$s,findings:$f}')"$'\n'
     fi
   done
 

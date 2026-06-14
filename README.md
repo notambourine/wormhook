@@ -103,13 +103,12 @@ It wraps `npm`/`pnpm`/`yarn`/`bun`/`npx` (not `node`) so they fast-scan the curr
 fresh clone, a poisoned transitive dep). It is a tripwire, not a sandbox (`command npm` or a
 direct `./node_modules/.bin/…` bypasses it) and fails open if `wormhook-scan` is absent.
 
-**Already using Socket Firewall?** Don't run a second `npm() { sfw npm … }` block alongside the
-guard — both define the same shell-function names, and whichever loads last *silently clobbers*
-the other, disabling a layer. Compose them in **one** wrapper chain (wormhook guard → `sfw` → real
-binary) instead:
+**Already using Socket Firewall?** Don't keep a separate `npm() { sfw npm … }` block — it and the
+guard define the same names, so whichever loads last silently clobbers the other. Chain them in one
+wrapper (guard → `sfw` → real, each layer fail-open); `/wormhook-setup` prints the exact block:
 
 ```bash
-command -v wormhook-scan >/dev/null 2>&1 && eval "$(wormhook-scan shell-init)"  # defines _wormhook_guard
+eval "$(wormhook-scan shell-init)"   # defines _wormhook_guard
 _sc_run() {
   local pm="$1"; shift
   command -v _wormhook_guard >/dev/null 2>&1 && { _wormhook_guard || return 1; }
@@ -117,10 +116,6 @@ _sc_run() {
 }
 for pm in npm pnpm yarn bun npx; do eval "${pm}() { _sc_run ${pm} \"\$@\"; }"; done; unset pm
 ```
-
-Each layer fails open to the real binary, so `sfw` is the *preferred* layer — never an assumed
-one (it can vanish on a version-manager node switch). `/wormhook-setup` prints whichever block
-matches your machine.
 
 ## How it works
 

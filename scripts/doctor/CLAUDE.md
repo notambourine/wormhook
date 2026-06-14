@@ -22,11 +22,17 @@ hybrid-jq invariant stays in the root `CLAUDE.md`; this file does not duplicate 
   `command -v`, `git config --get`, `launchctl print`, a file stat. A concern with no observable
   state does **not** belong here: a persistent colored line with nothing to verify is either a
   permanent false-🟡 nag (cry-wolf) or a meaningless line, and either way it erodes trust in the
-  lights that *do* mean something. Worked example (the reason this rule is written down):
-  shell-exec-guard ↔ Socket Firewall **composition** lives in the user's **interactive rc**, which
-  a `SessionStart` hook cannot see — so it is taught in `README.md` + `/wormhook-setup`, NOT
-  emitted as a doctor light. Observe an *ingredient* (e.g. `command -v sfw`) only to drive a real
-  status; never promote advice-with-no-observable-state to a light.
+  lights that *do* mean something. The line to hold is **assert the negative, never the positive**:
+  detect a definite *misconfiguration* you can observe; never claim a setup is *correct* (that is
+  usually the non-observable half). Worked example — `shellguard.sh` (exec-guard ↔ Socket Firewall):
+  whether the wrappers are *correctly composed* lives in the **interactive runtime** (which function
+  won the clobber, what load order ran) and a non-interactive hook cannot see it — so the check
+  never emits a "you are composed" 🟢-as-proof. But the clobber **anti-pattern** (a bare `sfw` PM
+  wrapper coexisting with the exec-guard) is plain **rc-file TEXT on disk**, as observable as the
+  git-hook files `coverage.sh` greps. So the check reads that text and is *false-negative-only*: it
+  🟡s only when the anti-pattern literally co-occurs (never cries wolf on a correct/composed rc),
+  ⚪ when the guard is not wired (opt-in), and never asserts correctness it cannot verify. The
+  *how-to-compose* guidance still lives in `README.md` + `/wormhook-setup`, not the light.
 
 - **Always-on, never silent-unless-degraded.** Every check emits its light every session — silence
   is the invisible-failure bug the split fixed (ran-and-fine vs never-ran is ambiguous). A
@@ -36,8 +42,8 @@ hybrid-jq invariant stays in the root `CLAUDE.md`; this file does not duplicate 
 - **`deps.sh` owns the jq-missing 🔴 and is registered FIRST.** It raises the static `printf`
   "scans are OFF" alarm *before* sourcing `_utils.sh`; every other check inherits `_utils.sh`'s
   silent jq fail-open (`command -v jq || exit 0` at source time — sourcing a file that `exit`s
-  exits the caller). CI asserts all six `doctor/*.sh` exist + are executable and `deps.sh` is
-  first in `hooks.json`. See root `CLAUDE.md` for the full hybrid-jq invariant (authoritative).
+  exits the caller). CI derives the check list from `hooks.json` and asserts each exists + is
+  executable and `deps.sh` is first. See root `CLAUDE.md` for the full hybrid-jq invariant.
 
 - **Emit only via the `wh_*` helpers** (`_utils.sh`): one object per check, all dynamic content
   through `jq --arg` (injection-safe — paths/versions/filenames can be named without breaking
@@ -45,8 +51,8 @@ hybrid-jq invariant stays in the root `CLAUDE.md`; this file does not duplicate 
 
 ## Adding a check
 
-1. New `doctor/<concern>.sh` — confirm the concern has an observable state first (see rule 2).
+1. New `doctor/<concern>.sh` — confirm the concern has an observable state first (rule 2); `chmod +x`.
 2. Source `_utils.sh`; emit exactly one `wh_flag <emoji> <concern> "<msg>" ["<ctx>"]`.
-3. Register it as its own `SessionStart` hook object in `hooks/hooks.json`.
-4. Update the CI presence-assert count and the root `CLAUDE.md` Layout list.
-5. It is a behavior change → bump `.claude-plugin/plugin.json`.
+3. Register it as its own `SessionStart` hook in `hooks/hooks.json` — CI derives the presence-assert
+   from there, so there is no list or count to update.
+4. Behavior change → bump `.claude-plugin/plugin.json`.

@@ -74,6 +74,11 @@
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/doctor/exposure.sh\"",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/doctor/shellguard.sh\"",
+            "timeout": 10
           }
         ]
       }

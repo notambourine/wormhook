@@ -109,3 +109,44 @@ jobs:
             exit 1
           fi
           echo "version bump OK: $old -> $new"
+
+  # ── Dogfood: run wormhook's OWN action.yml against wormhook's own tree ──
+  # action.yml ("run the engine in CI") ships in this repo but had no coverage on
+  # its own source. This exercises it on every push/PR and self-asserts the tree is
+  # clean by the exact engine the plugin ships -- eat our own dog food. harden-runner
+  # in audit mode doubles as evidence for the "no network calls -- ever" invariant:
+  # the run's egress-insights link shows the scan step makes zero outbound calls.
+  # Source-only tree (no node_modules to deep-walk) -> mode: fast.
+  wormhook-self:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Scan this repo with wormhook's own action
+        uses: ./
+        with:
+          mode: fast
+
+  # ── Complementary layer: shai-hulud-tripwire (committed-persistence artifacts) ──
+  # wormhook's block tier DELIBERATELY does not flag generic secrets-context workflow
+  # exfil or pull_request_target abuse -- too FP-prone (malware-patterns.sh
+  # MALWARE_WORKFLOW_RE matches only named campaign slugs). This reusable workflow
+  # specializes in exactly that tree-committed persistence pattern, so it is additive,
+  # not redundant. Offline + zero-secret (contents: read). Non-gating here: validate
+  # holds no secrets to gate via needs:, so the value is as a required status check
+  # behind a branch ruleset, not as a job barrier. allow-globs MIRRORS the in-tree
+  # .tripwire-allow so CI and the local SessionStart tripwire hook agree on what is a
+  # documented-IOC false positive (filename/hash/lifecycle hits are never exempted).
+  tripwire:
+    uses: notambourine/shai-hulud-tripwire/.github/workflows/tripwire.yml@60f5810fcb82970c1ed867a07aa7b2bebbb0b308 # v1
+    permissions:
+      contents: read
+    with:
+      allow-globs: |
+        README.md
+        scripts/wormhook.sh
+        scripts/malware-patterns.sh

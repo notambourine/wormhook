@@ -136,7 +136,7 @@ triggers (manual fleet `scan`, hourly launchd sweep, global git hook, opt-in she
 and the **GitHub Action** in `action.yml`; verbs `scan`/`check`/`git-hook`/`shell-init`/`install-*`/`status`/`config`). The user-facing
 installer is the `/wormhook-setup` slash command (`commands/wormhook-setup.md`), which the
 `SessionStart` `doctor/coverage.sh` light points at. Each doctor check emits its own status
-light; a soft nudge is silenceable via `WORMHOOK_SKIP_{RG,SFW,VET,COVERAGE,DRIFT}=1` (or
+light; a soft nudge is silenceable via `WORMHOOK_SKIP_{RG,SFW,VET,COVERAGE,CICD,DRIFT}=1` (or
 `WORMHOOK_DOCTOR_QUIET=1` for all), set in repo/user `settings.json` `env` — a silenced nudge
 degrades to ⚪, never to actual silence. The jq "scans are OFF" 🔴 (in `doctor/deps.sh`) is
 intentionally **not** silenceable. These invariants hold:

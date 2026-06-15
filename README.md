@@ -35,9 +35,10 @@ Requires `jq` and `bash`. [`ripgrep`](https://github.com/BurntSushi/ripgrep) is
 optional but strongly recommended — content scans use it when present (43× faster than
 BSD grep on large trees) and fall back to `grep` otherwise. There's nothing to invoke;
 it runs automatically. At `SessionStart` a row of doctor status lights (🟢/🟡/🔴/⚪, one per
-check, every session) reports your runtime deps, version drift, out-of-band coverage, the
-recommended [companion firewalls](#beyond-the-tiers) (Socket Firewall / `vet`), and a
-blast-radius exposure audit — each non-green light carries the one-liner to fix it.
+check, every session) reports your runtime deps, version drift, out-of-band coverage, CI
+supply-chain-gate coverage, the recommended [companion firewalls](#beyond-the-tiers)
+(Socket Firewall / `vet`), and a blast-radius exposure audit — each non-green light carries
+the one-liner to fix it.
 
 ## Run it outside Claude
 

@@ -31,8 +31,10 @@
 #   - Hades/Miasma/Mini Shai-Hulud PyPI wave (Jun 2026): MCP-typosquat PyPI packages
 #       (openai-mcp, langchain-core-mcp, tiktoken-mcp, instructor-mcp, ...) ship a
 #       weaponized *.pth startup hook that downloads Bun + runs _index.js (Hades JS
-#       stealer); /tmp/.sshu-setup.js SSH propagation; thebeautiful{march,snads}oftime
-#       fallback C2-discovery strings. Targets bioinformatics + MCP developers.
+#       stealer); native import-time .abi3.so modules (ensmallen_haswell/core2) that
+#       execute on package import with no .pth; /tmp/.sshu-setup.js SSH propagation;
+#       thebeautiful{march,snads}oftime fallback C2-discovery strings. Targets
+#       bioinformatics + MCP developers.
 #   - Remote-eval loader (recurring): atob(process.env.FAKE_KEY) -> fetch -> eval
 #   - CISA: https://www.cisa.gov/news-events/alerts/2025/09/23/widespread-supply-chain-compromise-impacting-npm-ecosystem
 #   - Datadog: https://securitylabs.datadoghq.com/articles/shai-hulud-2.0-npm-worm/
@@ -538,6 +540,44 @@ Immediate steps:
 BODY
 )"
   done
+fi
+
+# Native import-time payload (Hades/Miasma PyPI wave): a compiled .abi3.so extension
+# module that runs a credential stealer the moment Python imports the carrier package —
+# the binary analogue of the .pth hook above, needing no install step and no .pth. A
+# compiled binary is opaque to the content greps every other tier relies on, so the
+# exact basename (MALWARE_NATIVE_SO_NAMES) is the only tree-scan handle. Same bounded
+# venv walk as the .pth sweep; legit .abi3.so files are enumerated but only the two
+# known-bad campaign artifacts flag (zero FP).
+so_files=()
+while IFS= read -r _s; do [[ -n "$_s" ]] && so_files+=("$_s"); done < <(
+  timeout 5 find "${CWD}/.venv" "${CWD}/venv" "${CWD}/env" "${CWD}/.tox" \
+    -maxdepth 4 -name '*.abi3.so' -type f 2>/dev/null
+)
+for _s in "${CWD}"/*.abi3.so; do [[ -f "$_s" ]] && so_files+=("$_s"); done
+# Count-guard the iteration: under bash 3.2 + `set -u`, expanding "${so_files[@]}"
+# on an EMPTY array is an unbound-variable error (mirrors the .pth block above).
+if [[ ${#so_files[@]} -gt 0 ]]; then
+for so in "${so_files[@]}"; do
+  so_base="${so##*/}" so_bad=0
+  for _bad in "${MALWARE_NATIVE_SO_NAMES[@]}"; do [[ "$so_base" == "$_bad" ]] && so_bad=1; done
+  [[ "$so_bad" == 1 ]] || continue
+  alert "MALICIOUS NATIVE PYTHON MODULE DETECTED" "$(cat <<BODY
+A compiled Python extension matching a known Hades/Miasma payload is present:
+  $so
+${COMMAND:+Command blocked: $COMMAND}
+The Hades/Miasma PyPI wave ships native .abi3.so modules that execute a credential
+stealer when Python imports the carrier package — no install step, no .pth needed.
+
+Immediate steps:
+  1. Remove the module: command rm -f "$so"
+  2. Uninstall the carrier package and purge its site-packages dir
+  3. pip/uv list — audit for typosquats (openai-mcp, langchain-core-mcp, tiktoken-mcp, ...)
+  4. Rotate ALL credentials (PyPI/npm tokens, GitHub PATs/OIDC, SSH keys, cloud, LLM API keys)
+  5. Reinstall Python deps from a clean, pinned, hash-verified lockfile
+BODY
+)"
+done
 fi
 
 # ══ TIER 1: project source + package.json lifecycle — cheap (~26ms), every event ══

@@ -315,8 +315,9 @@ refreshes the cache), 🚨 findings. Non-gated commands stay silent.
 - **SANDWORM_MODE** — AI-toolchain poisoning: the marker, `*.workers.dev/{exfil,drain}`
   C2, `freefan`/`fanfree` DNS-tunnel domains, the drain bearer token.
 - **Hades / Miasma PyPI wave** (Jun 2026) — MCP typosquats (`openai-mcp`, `tiktoken-mcp`,
-  …) shipping a weaponized Python `.pth` startup hook (→ Bun → `_index.js` Hades stealer),
-  `/tmp/.sshu-setup.js` SSH propagation. Caught at Tier 0, and `pip`/`uv`/`python` now
+  …) shipping a weaponized Python `.pth` startup hook (→ Bun → `_index.js` Hades stealer)
+  and native import-time `.abi3.so` modules (`ensmallen_haswell`/`core2`) that execute on
+  package import with no `.pth`, plus `/tmp/.sshu-setup.js` SSH propagation. Caught at Tier 0, and `pip`/`uv`/`python` now
   [trigger that scan at `PreToolUse`](#beyond-the-tiers) so it runs **before** the interpreter
   auto-executes a poisoned `.pth` — not just on the next npm/git command.
 - **Dev-env & CI injection** — rogue `mcpServers`/SessionStart-hook entries across

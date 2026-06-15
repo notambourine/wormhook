@@ -1,0 +1,83 @@
+# wormhook as a reusable GitHub Action — the CI/PR-gate trigger for the same engine
+# that powers the Claude Code hook, the launchd sweep, and the global git hook.
+#
+# github.com has no custom pre-receive hook, so a push cannot be vetoed as its bytes
+# arrive. The reachable equivalent is: a ruleset that BLOCKS force pushes + requires a
+# PR, with THIS action as a required status check. Malware can sit on a feature branch
+# but a 🚨 verdict fails the check and the ruleset refuses the merge into a protected
+# branch. (On GitHub Enterprise Server you *can* run a real pre-receive hook — that is a
+# separate adapter with a different scan scope; this action is the github.com path.)
+#
+# Zero-network, same as every other trigger: stat/grep/jq over the checked-out tree.
+# No detection logic lives here — it shells the unchanged wormhook-scan.sh `check` verb.
+name: wormhook supply-chain scan
+description: >-
+  Scan the checked-out tree for npm/node + PyPI supply-chain malware (Shai-Hulud
+  1.0-3.0/Mini, SANDWORM_MODE, Axios/DPRK RAT, Hades/PyPI .pth, remote-eval loaders).
+  Local, zero-network. Fails the job on a confirmed IOC.
+author: NoTambourine LLC
+branding:
+  icon: shield
+  color: red
+
+inputs:
+  path:
+    description: Directory to scan. Defaults to the workspace root (the checked-out repo).
+    required: false
+    default: "."
+  mode:
+    description: >-
+      "deep" forces the Tier-2 node_modules content walk (run AFTER `npm ci` to scan
+      installed dependencies — the strongest gate). "fast" runs Tier 0+1 only (+Tier 2
+      on a cache miss) and is enough for a source-only tree.
+    required: false
+    default: deep
+  fail-on:
+    description: >-
+      "critical" (default) fails only on a confirmed IOC (🚨). "degraded" also fails on a
+      degraded scan (🟡 — missing signatures, timeout, unparseable verdict) for a
+      fail-closed posture.
+    required: false
+    default: critical
+
+runs:
+  using: composite
+  steps:
+    - name: wormhook scan
+      shell: bash
+      env:
+        WH_PATH: ${{ inputs.path }}
+        WH_MODE: ${{ inputs.mode }}
+        WH_FAIL_ON: ${{ inputs.fail-on }}
+      run: |
+        set -euo pipefail
+        # jq is preinstalled on GitHub-hosted runners; the engine hard-requires it.
+        command -v jq >/dev/null 2>&1 || {
+          echo "::error::wormhook needs jq (preinstalled on GitHub-hosted runners; on self-hosted: install jq)"
+          exit 1
+        }
+        engine="$GITHUB_ACTION_PATH/scripts/wormhook-scan.sh"
+        test -r "$engine" || { echo "::error::wormhook engine not found at $engine"; exit 1; }
+
+        args=(check "$WH_PATH")
+        case "$WH_MODE" in
+          deep) args+=(--deep) ;;
+          fast) ;;
+          *) echo "::error::mode must be 'fast' or 'deep' (got '$WH_MODE')"; exit 1 ;;
+        esac
+
+        # `check` => single-repo verdict on stdout. Exit: 0 clean · 1 critical · 2 degraded.
+        # `|| rc=$?` keeps `set -e` from aborting before we can map the code to a job result.
+        rc=0
+        bash "$engine" "${args[@]}" || rc=$?
+
+        case "$rc" in
+          0) echo "✅ wormhook: clean — no supply-chain IOC in $WH_PATH" ;;
+          1) echo "::error::wormhook: supply-chain IOC detected in $WH_PATH (see scan output above)"; exit 1 ;;
+          2)
+            if [ "$WH_FAIL_ON" = degraded ]; then
+              echo "::error::wormhook: scan degraded (🟡) and fail-on=degraded"; exit 1
+            fi
+            echo "::warning::wormhook: scan degraded (🟡) — passing because fail-on=critical" ;;
+          *) echo "::error::wormhook: unexpected engine exit code $rc"; exit 1 ;;
+        esac

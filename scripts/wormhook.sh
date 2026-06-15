@@ -368,23 +368,32 @@ done
 # (SAP-CAP/AntV wave: the task re-runs `node .claude/setup.mjs` on every project open).
 # Detecting the WIRED entry (not just the file) catches the case where the dropper ran
 # once, injected the config, then deleted its on-disk file. Schemas differ across tools,
-# so scan EVERY string value; the dropper-token set is specific enough that any hit is
-# high-signal (a malicious folderOpen task references setup.mjs, already a dropper token).
+# so scan EVERY string value. Two pattern classes flag: a known dropper token (e.g. a
+# folderOpen task referencing setup.mjs) OR the file-LESS inline form — a hook/MCP entry
+# whose command IS a remote-script-to-shell pipe (curl … | sh), which names no dropper
+# file. MALWARE_REMOTE_EXEC_RE is shared with the git-hook scan below: same injected-
+# command threat, so the same block-safe behavioral marker applies to both surfaces.
 for cfg in \
   "${CWD}/.claude/settings.json"  "${HOME}/.claude/settings.json" \
   "${CWD}/.cursor/mcp.json"       "${HOME}/.cursor/mcp.json" \
   "${CWD}/.vscode/mcp.json"       "${HOME}/.continue/config.json" \
   "${CWD}/.vscode/tasks.json"     "${HOME}/.windsurf/mcp.json"; do
   [[ -f "$cfg" ]] || continue
-  cfg_hit=$(jq -r '[.. | strings] | .[]' "$cfg" 2>/dev/null \
-    | grep -iE "$MALWARE_DROPPER_TOKENS_RE" | head -1)
+  # del(.permissions): permission allow/deny rules legitimately carry behavioral
+  # patterns (e.g. a `Bash(curl * | bash*)` DENY rule the user added for safety),
+  # which would FP on MALWARE_REMOTE_EXEC_RE. They are user security POLICY, never the
+  # executable wiring a dropper hijacks — the dropper injects .hooks/.mcpServers/tasks,
+  # all of which survive the del. (No-op on the non-Claude configs without .permissions.)
+  cfg_hit=$(jq -r 'del(.permissions) | [.. | strings] | .[]' "$cfg" 2>/dev/null \
+    | grep -iE "$MALWARE_DROPPER_TOKENS_RE|$MALWARE_REMOTE_EXEC_RE" | head -1)
   [[ -z "$cfg_hit" ]] && continue
   alert "INJECTED AGENT CONFIG DETECTED" "$(cat <<BODY
-A value in $cfg references a known agent-hijack dropper:
+A value in $cfg references a known agent-hijack dropper, or pipes a remote script to a shell:
   $cfg_hit
 This is how Mini Shai-Hulud / SANDWORM_MODE re-runs its payload on every Claude Code,
 Cursor, VS Code, Continue, or Windsurf launch — as a SessionStart hook or a rogue
-MCP server — even after deleting the dropper file.
+MCP server (even after deleting the dropper file), or as an inline curl-to-shell hook
+command with no dropper file at all.
 ${COMMAND:+Command blocked: $COMMAND}
 
 Immediate steps:
@@ -408,7 +417,7 @@ hooks_path=$(git -C "$CWD" config --get core.hooksPath 2>/dev/null) && [[ -n "$h
 for hd in "${git_hook_dirs[@]}"; do
   for h in pre-commit pre-push post-checkout post-merge; do
     [[ -f "$hd/$h" ]] || continue
-    gh_hit=$(grep -iE "$MALWARE_DROPPER_TOKENS_RE"'|curl[^|]*\|[^|]*(sh|node|bash)' "$hd/$h" 2>/dev/null | head -1)
+    gh_hit=$(grep -iE "$MALWARE_DROPPER_TOKENS_RE|$MALWARE_REMOTE_EXEC_RE" "$hd/$h" 2>/dev/null | head -1)
     [[ -z "$gh_hit" ]] && continue
     alert "MALICIOUS GIT HOOK DETECTED" "$(cat <<BODY
 A git hook runs a known dropper / pipes a remote script to a shell:

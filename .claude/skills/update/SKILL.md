@@ -6,7 +6,7 @@ description: Add detection for a new npm/PyPI supply-chain worm or campaign to w
 # Adding a new campaign to wormhook
 
 This is the end-to-end process for turning a fresh advisory into a verified, correctly-tiered
-patch PR. The invariants this depends on live in [`CLAUDE.md`](../../CLAUDE.md) — read its
+patch PR. The invariants this depends on live in [`CLAUDE.md`](../../../CLAUDE.md) — read its
 "Invariants" and "Working here" sections first; this skill is the procedure, not a re-statement
 of the rules.
 
@@ -41,9 +41,9 @@ For **each** candidate, `WebFetch` the cited primary advisory and confirm the ex
 - **UNCONFIRMED** — no primary source → **do not land** (hold for a second source).
 - **REFUTED / redundant** — wrong, or already covered by an existing pattern → drop.
 
-Before adding anything, `grep` the candidate against [`scripts/malware-patterns.sh`](../../scripts/malware-patterns.sh)
+Before adding anything, `grep` the candidate against [`scripts/malware-patterns.sh`](../../../scripts/malware-patterns.sh)
 — substring matches mean it is already covered (e.g. `m-kosche.com` already matches
-`t.m-kosche.com`). And read [`scripts/wormhook.sh`](../../scripts/wormhook.sh) to confirm a
+`t.m-kosche.com`). And read [`scripts/wormhook.sh`](../../../scripts/wormhook.sh) to confirm a
 "gap" is real (e.g. `/tmp/.sshu-setup.js` is already a Tier-0 literal).
 
 ## 3. Place by tier (blast-radius rule)

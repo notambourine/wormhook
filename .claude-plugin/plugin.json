@@ -1,7 +1,7 @@
 {
   "$schema": "https://www.schemastore.org/claude-code-plugin-manifest.json",
   "name": "wormhook",
-  "version": "0.15.0",
+  "version": "0.15.1",
   "description": "npm/node supply-chain malware scanner for Claude Code. Tiered hook detecting Shai-Hulud (1.0-3.0 + Mini), the SAP-CAP/AntV/TeamPCP agent-hijack wave, Axios/DPRK RAT, SANDWORM_MODE, the Hades/PyPI .pth + native-module wave, and remote-eval loaders via filename, SHA256, and behavioral IOCs. Blocks agent-boundary persistence: rogue .claude/.cursor/.continue/.vscode hooks and MCP entries, .vscode/tasks.json folderOpen auto-exec, .pth startup hooks, native import-time .abi3.so modules, poisoned git hooks, and LaunchAgent/systemd units. Adds Python (pip/uv) execution gating and a continuous UserPromptSubmit monitor. Local and zero-network — no registry calls, no telemetry. See the README for out-of-Claude scanning (the wormhook-scan CLI, scheduled sweeps, a git-hook + GitHub Action CI gate), the recommended Socket Firewall / safedep/vet pairing, and the SessionStart health dashboard (status lights + blast-radius exposure audit).",
   "author": {
     "name": "NoTambourine LLC",

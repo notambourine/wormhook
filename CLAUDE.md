@@ -30,10 +30,16 @@ that aren't obvious from the code.
   don't need it; anything touching the scripts does.
 - **The two `description` fields serve different roles — keep them different, do not sync them.**
   `marketplace.json`'s is a short browse-list **tagline** (one line, what+why); `plugin.json`'s is
-  the **full** install/inspect description (the campaign + IOC detail). The plugin platform has no
-  shared-field / `$ref` mechanism, so a byte-identical copy is just drift waiting to happen — we
-  deliberately gave each a distinct job instead, and there is **no parity check**. Edit whichever
-  fits the surface; do not mirror one into the other.
+  the **full install/inspect description — the campaign + IOC + blocking detail ONLY, not a feature
+  tour.** Someone reading it at `claude plugin inspect` is deciding whether to trust a plugin about
+  to scan their filesystem: list what it detects and blocks. Operational surfaces (the
+  `wormhook-scan` CLI, scheduled sweeps, git-hook/CI gate, the SessionStart dashboard) belong in the
+  README, **not** here — and do **not** try to link the README from this field: it renders as plain
+  text at inspect time, where a relative anchor does not resolve and the reader is not on the repo
+  page. A one-line prose "see the README for …" pointer is fine; a markdown link is dead text. The
+  plugin platform has no shared-field / `$ref` mechanism, so a byte-identical copy is just drift
+  waiting to happen — we deliberately gave each a distinct job instead, and there is **no parity
+  check**. Edit whichever fits the surface; do not mirror one into the other.
 - **The doctor checks follow the hybrid jq model (KEY-DECISION 2026-06-13, refined for the
   0.10.0 split; supersedes the older fully-jq-free rule).** The *one* line the doctor must emit
   without `jq` — `jq missing, scans are OFF` — is a hand-rolled static `printf` early-exit at

@@ -132,8 +132,8 @@ on the unioned glob: PostToolUse's `if` covers `INSTALL_RE ∪ GIT_RE ∪ PYINST
 ## Out-of-band adapters (`wormhook-scan.sh`)
 
 The Claude hook is **one trigger, not the engine**. `wormhook-scan.sh` adds the non-Claude
-triggers (manual fleet `scan`, hourly launchd sweep, global git hook, opt-in shell exec-guard;
-verbs `scan`/`check`/`git-hook`/`shell-init`/`install-*`/`status`/`config`). The user-facing
+triggers (manual fleet `scan`, hourly launchd sweep, global git hook, opt-in shell exec-guard,
+and the **GitHub Action** in `action.yml`; verbs `scan`/`check`/`git-hook`/`shell-init`/`install-*`/`status`/`config`). The user-facing
 installer is the `/wormhook-setup` slash command (`commands/wormhook-setup.md`), which the
 `SessionStart` `doctor/coverage.sh` light points at. Each doctor check emits its own status
 light; a soft nudge is silenceable via `WORMHOOK_SKIP_{RG,SFW,VET,COVERAGE,DRIFT}=1` (or
@@ -171,6 +171,15 @@ intentionally **not** silenceable. These invariants hold:
   path — latency + version-manager breakage), is `command`-based so it never self-recurses,
   fails open if the CLI is absent, and must be loaded **after** nvm/asdf (it defines shell
   functions). Do not promote it from opt-in to auto-installed, and do not add `node`.
+- **`action.yml` is the github.com PR-gate trigger — a thin `check`-verb wrapper, not an engine.**
+  It shells `wormhook-scan.sh check` from `$GITHUB_ACTION_PATH` (the consuming repo's checkout is
+  the scan target) and maps the `0/1/2` exit contract to job pass/fail; **no detection logic, no
+  signatures, no network** (same DRY/zero-network rule as every adapter). It gates the **merge**,
+  not the push: github.com has no `pre-receive` hook (GHE Server only), so the intended posture is
+  *required status check + a ruleset that blocks force pushes*. Its embedded `run:` shell is **not**
+  covered by the `scripts/*.sh` shellcheck glob — `actionlint` rejects an action-metadata file as a
+  "workflow", so lint it by extracting `.runs.steps[].run` and piping through `shellcheck` (see the
+  PR that added it). Editing `action.yml` is a behavior change → **bump `plugin.json`**.
 - Editing `wormhook-scan.sh` (or `commands/wormhook-setup.md`) is a behavior change →
   **bump `plugin.json`** (CI tripwire) and `wormhook-scan.sh` is covered by the
   `shellcheck scripts/*.sh scripts/doctor/*.sh` step.

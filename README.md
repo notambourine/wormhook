@@ -117,6 +117,43 @@ _sc_run() {
 for pm in npm pnpm yarn bun npx; do eval "${pm}() { _sc_run ${pm} \"\$@\"; }"; done; unset pm
 ```
 
+### Gate pull requests on GitHub (Action)
+
+wormhook ships an `action.yml`, so the **same engine** runs as a CI check. Drop it into any
+repo's workflow to scan the checked-out tree on every PR:
+
+```yaml
+# .github/workflows/supply-chain.yml
+name: supply-chain
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  wormhook:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: npm ci                       # optional — installs deps so the deep scan sees them
+      - uses: notambourine/wormhook@v0.13.0
+        # with:
+        #   path: .            # dir to scan (default: workspace root)
+        #   mode: deep         # deep = Tier-2 node_modules walk (default); fast = source-only
+        #   fail-on: critical  # critical (default) | degraded (fail-closed on 🟡 too)
+```
+
+A 🚨 verdict fails the job (exit `1`); the finding banner prints above the error annotation. A
+🟡 degraded scan passes by default (set `fail-on: degraded` to fail closed). Like every other
+trigger it is **zero-network** — `stat`/`grep`/`jq` over the tree, no detection logic duplicated.
+
+**This is a *merge* gate, not a push gate — and that is the right shape on github.com.** GitHub's
+only hook that can reject a push as it arrives (`pre-receive`) is **GitHub Enterprise Server
+only**; github.com has no equivalent. So the reachable defense is a **ruleset** that *blocks force
+pushes* and *requires a PR*, with this action as a **required status check**: malware can sit on a
+feature branch but the failing check stops the merge into a protected branch. Blocking the force
+push itself is the ruleset's job (content-blind); scanning the content is wormhook's. (On GitHub
+Enterprise Server you *can* wire `wormhook-scan` into a real `pre-receive` hook — a separate
+adapter with a tree-only scan scope.)
+
 ## How it works
 
 The scan is **tiered by cost × volatility**, so the expensive part only runs when it

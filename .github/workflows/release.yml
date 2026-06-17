@@ -1,0 +1,58 @@
+name: release
+# Squash-merge to main lands one commit; if it carried a plugin.json version bump
+# (the validate.yml tripwire guarantees behavior changes do), publish that version
+# as an immutable vX.Y.Z tag + GitHub Release. Idempotent: a push that did not move
+# the version (docs/CI-only) finds the tag already exists and no-ops. Closes the gap
+# that forced action consumers (e.g. PicturesOnGold/horizon#58) to pin to a raw main
+# SHA because no semver tag resolved -- a vX.Y.Z tag is what makes Dependabot able to
+# version-track a `uses: notambourine/wormhook@<sha> # vX.Y.Z` pin.
+on:
+  push:
+    branches: [main]
+
+# Top-level token is read-only; the one job that writes opts up locally.
+permissions:
+  contents: read
+
+# Never run two releases at once (e.g. two merges in quick succession); let the
+# first finish so the second sees its tag and the version check stays correct.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the tag + release; scoped to this job only
+    steps:
+      # Egress monitoring (StepSecurity), mirrors validate.yml. audit = observe-only.
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          # `gh release create` makes the tag for us via the API, so we never
+          # git-push -- no need to persist the token into .git/config (zizmor
+          # artipacked), matching validate.yml.
+          persist-credentials: false
+
+      - name: Tag + release when plugin.json version is new
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          version=$(jq -r '.version' .claude-plugin/plugin.json)
+          tag="v$version"
+          if gh release view "$tag" --repo "$REPO" >/dev/null 2>&1; then
+            echo "$tag already released -- nothing to do"
+            exit 0
+          fi
+          gh release create "$tag" \
+            --repo "$REPO" \
+            --target "$SHA" \
+            --title "wormhook $tag" \
+            --generate-notes
+          echo "released $tag"

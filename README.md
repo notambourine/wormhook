@@ -308,7 +308,7 @@ refreshes the cache), 🚨 findings. Non-gated commands stay silent.
 - **SAP-CAP / AntV / TeamPCP wave** (Apr–Jun 2026) — the unique payload-internal strings
   (`ctf-scramble-v2` PBKDF2 salt, the `firedalazer` / `OhNoWhatsGoingOnWithGitHub` GitHub-
   commit-search C2 keywords, the `__DAEMONIZED` guard, the russian-locale kill-switch),
-  attacker C2 hosts (`audit.checkmarx.cx`, `api.cloud-aws.adc-e.uk`), and the `kitty-monitor`
+  attacker C2 host (`audit.checkmarx.cx`), and the `kitty-monitor`
   LaunchAgent/systemd persistence unit + its `~/.local/share/kitty/cat.py` daemon.
 - **Axios / plain-crypto-js RAT** (Sapphire Sleet / DPRK) — `com.apple.act.mond`
   persistence, `sfrclak` C2 beacons.
@@ -379,7 +379,7 @@ mirrored in the header of [`scripts/wormhook.sh`](./scripts/wormhook.sh)):
 - **Socket** — [SANDWORM_MODE](https://socket.dev/blog/sandworm-mode-npm-worm-ai-toolchain-poisoning) · [Miasma & Hades (PyPI/MCP)](https://socket.dev/blog/mini-shai-hulud-miasma-and-hades-worms-target-bioinformatics-and-mcp-developers-via-malicious)
 - **Snyk** — [Mini Shai-Hulud hits AntV](https://snyk.io/blog/mini-shai-hulud-antv-npm-supply-chain-attack/) (`kitty-monitor`, `firedalazer`, `.vscode/tasks.json` `folderOpen`)
 - **Unit 42** — [Monitoring npm supply-chain attacks](https://unit42.paloaltonetworks.com/monitoring-npm-supply-chain-attacks/) (`audit.checkmarx.cx`, `OhNoWhatsGoingOnWithGitHub` C2)
-- **Mend** — [Shai-Hulud SAP CAP via Claude Code](https://www.mend.io/blog/shai-hulud-sap-cap-supply-chain-attack-claude-code/) (`ctf-scramble-v2`, `__DAEMONIZED`, russian-locale kill-switch, `api.cloud-aws.adc-e.uk`)
+- **Mend** — [Shai-Hulud SAP CAP via Claude Code](https://www.mend.io/blog/shai-hulud-sap-cap-supply-chain-attack-claude-code/) (`ctf-scramble-v2`, `__DAEMONIZED`, russian-locale kill-switch)
 
 ## License
 

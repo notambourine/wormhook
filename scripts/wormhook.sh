@@ -25,7 +25,7 @@
 #       .vscode/tasks.json "runOn":"folderOpen"; kitty-monitor LaunchAgent/systemd unit +
 #       ~/.local/share/kitty/cat.py daemon; ctf-scramble-v2 PBKDF2 salt, firedalazer /
 #       OhNoWhatsGoingOnWithGitHub C2 keywords, __DAEMONIZED guard, russian-locale kill-switch,
-#       audit.checkmarx.cx + api.cloud-aws.adc-e.uk C2
+#       audit.checkmarx.cx C2
 #   - SANDWORM_MODE (Feb 2026): AI toolchain poisoning, MCP injection, SSH propagation
 #   - Axios/plain-crypto-js (Mar 2026): Sapphire Sleet (DPRK) RAT via sfrclak.com C2
 #   - Hades/Miasma/Mini Shai-Hulud PyPI wave (Jun 2026): MCP-typosquat PyPI packages

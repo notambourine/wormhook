@@ -109,13 +109,16 @@ guard define the same names, so whichever loads last silently clobbers the other
 wrapper (guard → `sfw` → real, each layer fail-open); `/wormhook-setup` prints the exact block:
 
 ```bash
-eval "$(wormhook-scan shell-init)"   # defines _wormhook_guard
-_sc_run() {
+eval "$(wormhook-scan shell-init)"   # defines __wormhook_guard
+# Helper names are DOUBLE-underscore on purpose: Claude Code's shell snapshot drops
+# single-underscore functions (zsh's `_name` completion namespace), which would leave the
+# surviving npm/… wrappers calling an undefined helper — bricking npm inside its Bash tool.
+__sc_run() {
   local pm="$1"; shift
-  command -v _wormhook_guard >/dev/null 2>&1 && { _wormhook_guard || return 1; }
+  command -v __wormhook_guard >/dev/null 2>&1 && { __wormhook_guard || return 1; }
   if command -v sfw >/dev/null 2>&1; then command sfw "$pm" "$@"; else command "$pm" "$@"; fi
 }
-for pm in npm pnpm yarn bun npx; do eval "${pm}() { _sc_run ${pm} \"\$@\"; }"; done; unset pm
+for pm in npm pnpm yarn bun npx; do eval "${pm}() { __sc_run ${pm} \"\$@\"; }"; done; unset pm
 ```
 
 ### Gate pull requests on GitHub (Action)

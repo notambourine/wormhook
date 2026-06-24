@@ -12,7 +12,7 @@
 # composed (that is the non-observable positive). It reads the live $HOME rc files the shell loads
 # (not any dotfiles repo). False-negative-only by design: it skips sourced fragments/includes and
 # multi-line function bodies, so it can MISS a clobber but never cries wolf on a correct setup
-# (the composed block's PM functions call _sc_run, not sfw, so they do not match).
+# (the composed block's PM functions call __sc_run, not sfw, so they do not match).
 #   🟡 clobber: exec-guard + a bare `sfw` PM wrapper coexist -> compose them (/wormhook-setup).
 #   🟢 exec-guard wired, no clobber.   ⚪ not wired (opt-in), no rc files, or silenced.
 set -uo pipefail
@@ -38,7 +38,7 @@ if ! grep -lE 'wormhook-scan[[:space:]]+shell-init' "${rc_files[@]}" >/dev/null 
 fi
 
 # Guard is wired. Clobber anti-pattern = a package-manager function whose body calls `sfw`
-# DIRECTLY (e.g. `npm() { sfw npm "$@"; }`). The composed block's PM functions call `_sc_run`
+# DIRECTLY (e.g. `npm() { sfw npm "$@"; }`). The composed block's PM functions call `__sc_run`
 # (sfw is reached only inside that helper), so they do NOT match — no false positive on a correct
 # setup. uv/cargo are intentionally sfw-only and not PM names here, so they never trip this.
 clobber=$(grep -lE '^[[:space:]]*(npm|pnpm|yarn|bun|npx)[[:space:]]*\([[:space:]]*\)[[:space:]]*\{[^}]*sfw' "${rc_files[@]}" 2>/dev/null) || true

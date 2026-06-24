@@ -80,17 +80,19 @@ command -v sfw >/dev/null 2>&1 && echo sfw-present || echo sfw-absent
   silently clobber each other (last loaded wins), disabling a layer. Paste this single block,
   loaded last:
   ```bash
-  command -v wormhook-scan >/dev/null 2>&1 && eval "$(wormhook-scan shell-init)"  # defines _wormhook_guard
-  _sc_run() {
+  command -v wormhook-scan >/dev/null 2>&1 && eval "$(wormhook-scan shell-init)"  # defines __wormhook_guard
+  # Double-underscore helper names are load-bearing: Claude Code's shell snapshot drops
+  # single-underscore functions (zsh completion namespace), which would brick npm in its Bash tool.
+  __sc_run() {
     local pm="$1"; shift
-    command -v _wormhook_guard >/dev/null 2>&1 && { _wormhook_guard || return 1; }
+    command -v __wormhook_guard >/dev/null 2>&1 && { __wormhook_guard || return 1; }
     if command -v sfw >/dev/null 2>&1; then command sfw "$pm" "$@"; else command "$pm" "$@"; fi
   }
-  npm()  { _sc_run npm  "$@"; }
-  pnpm() { _sc_run pnpm "$@"; }
-  yarn() { _sc_run yarn "$@"; }
-  bun()  { _sc_run bun  "$@"; }
-  npx()  { _sc_run npx  "$@"; }
+  npm()  { __sc_run npm  "$@"; }
+  pnpm() { __sc_run pnpm "$@"; }
+  yarn() { __sc_run yarn "$@"; }
+  bun()  { __sc_run bun  "$@"; }
+  npx()  { __sc_run npx  "$@"; }
   ```
 
 Every layer fails open to the real binary, so a missing sfw or wormhook-scan never bricks the

@@ -618,7 +618,15 @@ cmd_shell_init() {
 # in a repo with a live supply-chain IOC. The out-of-Claude analog of the PreToolUse block.
 # Load AFTER nvm/asdf. Not airtight (a direct ./node_modules/.bin/… or `command npm`
 # bypasses it) — a tripwire, not a sandbox. Fail-open if wormhook-scan is absent.
-_wormhook_guard() {
+#
+# Name MUST stay DOUBLE-underscore. Claude Code snapshots the interactive shell into a
+# file it sources in every Bash-tool call, and its generator filters out single-underscore
+# functions (zsh's `_name` completion namespace). The unprefixed npm/pnpm/… wrappers below
+# survive that filter; a single-underscore helper would NOT — leaving the wrappers calling
+# an undefined function (`command not found`, then `&&` short-circuits so `command npm`
+# never runs: npm bricks fail-CLOSED inside Claude). `__` dodges the filter, matching the
+# __zoxide_*/__starship_* helpers that survive. Do not "tidy" it back to one underscore.
+__wormhook_guard() {
   command -v wormhook-scan >/dev/null 2>&1 || return 0
   # Exit codes: 0 clean · 1 critical (IOC) · 2 degraded. Block ONLY on 1 — a degraded
   # scan (missing dep, timeout, unparseable verdict) must FAIL OPEN, not brick npm with
@@ -628,11 +636,11 @@ _wormhook_guard() {
   printf '\033[1;31m⛔ wormhook blocked this command: supply-chain IOC in %s\n   run `wormhook-scan .` for detail; clear it before re-running.\033[0m\n' "$PWD" >&2
   return 1
 }
-npm()  { _wormhook_guard && command npm  "$@"; }
-pnpm() { _wormhook_guard && command pnpm "$@"; }
-yarn() { _wormhook_guard && command yarn "$@"; }
-bun()  { _wormhook_guard && command bun  "$@"; }
-npx()  { _wormhook_guard && command npx  "$@"; }
+npm()  { __wormhook_guard && command npm  "$@"; }
+pnpm() { __wormhook_guard && command pnpm "$@"; }
+yarn() { __wormhook_guard && command yarn "$@"; }
+bun()  { __wormhook_guard && command bun  "$@"; }
+npx()  { __wormhook_guard && command npx  "$@"; }
 SH
 }
 

@@ -60,6 +60,13 @@ set -uo pipefail
 
 command -v jq &>/dev/null || { echo "Error: jq required" >&2; exit 1; }
 
+# Scan-runtime stamp for the SessionStart status line (see the "(x.xs)" suffix below). Captured
+# here — jq just confirmed present — so it spans the whole scan (signature load + payload parse +
+# tiers). bash 3.2 has no $EPOCHREALTIME and BSD `date` no %N, so `jq -n now` is the sub-second
+# clock; printf %.1f formats it. Used only on the session_start status line, so the blocking
+# pre_tool/prompt_submit paths pay nothing.
+WH_T0=$(jq -n now 2>/dev/null) || WH_T0=""
+
 # Malware signatures: single source of truth, bundled alongside this hook so a
 # pattern added once reaches every scan tier. Resolve relative to this script's own
 # dir — works regardless of where the plugin is installed (don't depend on $HOME).
@@ -866,16 +873,27 @@ if [[ -z "$ALERTS" ]]; then
   elif [[ -d "$NODE_MODULES" ]]; then
     SCOPE+=" + node_modules (cached, deps unchanged)"
   fi
+  # Scan-runtime suffix " (x.xs)" — SessionStart only, matching the doctor dashboard lights it sits
+  # beside. The per-turn/blocking events (pre_tool/post_tool/prompt_submit) stay unsuffixed: their
+  # latency is the user's own command, not a dashboard metric. Guard on a non-empty stamp before
+  # subtracting — a `:-0` default would make jq report `now - 0` (the whole Unix epoch) as the scan
+  # time; an empty stamp (jq-now failed at startup) short-circuits to "(0.0s)".
+  DUR=""
+  if [[ "$MODE" == "session_start" ]]; then
+    __elapsed=0
+    [[ -n "${WH_T0:-}" ]] && __elapsed=$(jq -n --argjson t0 "$WH_T0" 'now - $t0' 2>/dev/null || echo 0)
+    DUR=" ($(printf '%.1f' "$__elapsed")s)"
+  fi
   if [[ -n "$WARNINGS" ]]; then
     # A degraded pass speaks on EVERY event, including prompt_submit — a silently degraded
     # continuous monitor is the invisibility bug all over again.
-    jq -nc --arg msg "🟡 [wormhook] passed with caveats ($SCOPE) — $WARNINGS" '{verdict: "yellow", systemMessage: $msg}'
+    jq -nc --arg msg "🟡 [wormhook] passed with caveats ($SCOPE)$DUR — $WARNINGS" '{verdict: "yellow", systemMessage: $msg}'
   elif [[ "$MODE" != "prompt_submit" ]]; then
     # Clean 🟢 is suppressed for prompt_submit ONLY: it fires every human turn, so a 🟢 each
     # time would spam the transcript. The continuous monitor stays silent when healthy and
     # speaks only on a finding (🚨 block above) or degradation (🟡 above). (Note: the SessionStart
     # doctor checks, by contrast, now emit a 🟢 every session — that is the dashboard, not a per-turn monitor.)
-    jq -nc --arg msg "🟢 [wormhook] clean ($SCOPE)" '{verdict: "green", systemMessage: $msg}'
+    jq -nc --arg msg "🟢 [wormhook] clean ($SCOPE)$DUR" '{verdict: "green", systemMessage: $msg}'
   fi
 fi
 

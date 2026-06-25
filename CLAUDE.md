@@ -158,7 +158,8 @@ intentionally **not** silenceable. These invariants hold:
   invariant). The launchd plist escapes every value via `_xml`.
 - **The git hook must never self-flag.** Its body calls only the local CLI — no `curl|…|sh`,
   no `MALWARE_DROPPER_TOKENS_RE` strings — so the engine's MALICIOUS-GIT-HOOK Tier-0 check
-  does not trip on it. Verified by test; keep the hook body clean if you touch `_hook_block`.
+  does not trip on it. Verified by `tests/run.sh` (it runs the real `install-git-hook` body
+  through the Tier-0 scan and asserts a clean verdict); keep the hook body clean if you touch `_hook_block`.
 - **Installers are opt-in, idempotent, non-clobbering, reversible.** `install-git-hook`
   cooperates with an existing `core.hooksPath` and appends a `# >>> wormhook >>>` marker block
   to a pre-existing hook (never overwrites); `uninstall-git-hook` removes only that block.

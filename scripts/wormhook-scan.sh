@@ -60,34 +60,27 @@ _scan_one() {  # $1=dir  $2=fast|deep
   fi
   printf '%s' "$payload" | bash "$ENGINE" 2>/dev/null
 }
-_glyph() {  # stdin: engine JSON -> 🟢/🟡/🚨. Prefer the machine-readable `verdict`; fall back
-            # to the systemMessage glyph prefix (older engine output / version drift). A
-            # missing/garbled verdict resolves to 🟡 — degraded, never silently green.
+_glyph() {  # stdin: engine JSON -> 🟢/🟡/🚨 from the machine-readable `verdict`. The engine and
+            # this CLI ship in one install (ENGINE is the sibling wormhook.sh) and cannot
+            # version-drift, so the structured `verdict` is the sole contract — no systemMessage
+            # glyph-prefix scrape. A missing/unrecognized verdict resolves to 🟡 (the one real
+            # no-verdict path, signatures-unavailable, is already a degraded state) — degraded,
+            # never silently green.
   local g
   g=$(jq -r '
     (.verdict // "") as $v
     | if   $v=="red"    then "🚨"
       elif $v=="yellow" then "🟡"
       elif $v=="green"  then "🟢"
-      else (.systemMessage // "") as $m
-        | if   ($m|startswith("🚨")) then "🚨"
-          elif ($m|startswith("🟡")) then "🟡"
-          elif ($m|startswith("🟢")) then "🟢"
-          else "🟡" end
-      end' 2>/dev/null)
+      else "🟡" end' 2>/dev/null)
   case "$g" in "🚨"|"🟡"|"🟢") printf '%s' "$g" ;; *) printf '🟡' ;; esac
 }
-# Alert TITLEs from a verdict (one per line). Block titles render as "🚨  TITLE" at
-# line-start inside additionalContext; the systemMessage uses a single space, so this
-# matches blocks only. Titles are clean strings (no globs) => safe for set membership.
-_titles() {  # finding titles, one per line. Prefer structured .findings[].title; fall back
-             # to scraping the additionalContext banner (older engine output / version drift).
-  local j; j=$(cat)
-  if printf '%s' "$j" | jq -e '(.findings // []) | length > 0' >/dev/null 2>&1; then
-    printf '%s' "$j" | jq -r '.findings[].title'
-  else
-    printf '%s' "$j" | jq -r '.hookSpecificOutput.additionalContext // ""' 2>/dev/null | grep '^🚨  ' | sed 's/^🚨  //'
-  fi
+# Alert TITLEs from a verdict (one per line) from the structured `findings` array — clean strings
+# (no globs) => safe for set membership. Empty when there are no findings (every non-red verdict;
+# red always carries findings). Same single-install contract as _glyph: no additionalContext-banner
+# scrape fallback, because there is no drifted engine to fall back for.
+_titles() {  # finding titles, one per line, from .findings[].title
+  jq -r '(.findings // []) | .[] | .title' 2>/dev/null
 }
 # Per-finding identity keys (one base64 token per line) for the global-vs-local dedup.
 # Keyed on the FULL {title,body} — the body carries the matched path — NOT the class-level

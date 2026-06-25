@@ -99,6 +99,80 @@ jobs:
           done
           echo "registered doctor checks present + executable; deps.sh first"
 
+      # Makes the "Two sources of truth" invariant executable (CLAUDE.md): which commands
+      # trigger a scan is encoded twice — the *_RE regexes in wormhook.sh (the precise gate)
+      # and the `if` globs in hooks.json (the coarse perf pre-filter). The contract is `if` ⊇
+      # regex: `if` BROADER is a free wasted spawn, but `if` NARROWER means the hook silently
+      # never fires and the scan is skipped with no signal. This derives the gated verbs FROM
+      # the regexes (npm/pnpm/yarn/bun/npx/node, the pip*/uv/python* set, and git ops as
+      # `git <sub>`) and asserts each has a covering Bash(<verb> *) glob in the right event.
+      # UserPromptSubmit is exempt — its payload carries no command, so its hook entry has no
+      # `if` (it gates purely on EVENT). Reads only repo files (no workflow inputs); no edits.
+      - name: Assert if-globs cover the gated regexes (if ⊇ regex)
+        run: |
+          HOOK=scripts/wormhook.sh
+          HOOKS_JSON=hooks/hooks.json
+          regex_of() { sed -n "s/^$1='\(.*\)'\$/\1/p" "$HOOK"; }
+          # Command-coverage prefixes a regex gates, one per line. Non-git verbs collapse to
+          # the command NAME (Bash(npm *) covers every npm subcommand); git ops expand to
+          # `git <sub>` (globs are per-subcommand). Top-level `|` split honors paren depth.
+          regex_verbs() {
+            local re="$1" body branch inner s
+            body="${re#^\\s\*}"
+            if [[ "$body" == git* ]]; then
+              local subs _subs
+              subs=$(printf '%s' "$body" | sed -n 's/.*(\(pull[^)]*\))(\\s|\$).*/\1/p')
+              IFS='|' read -ra _subs <<< "$subs"
+              for s in "${_subs[@]}"; do printf 'git %s\n' "$s"; done
+              return
+            fi
+            body="${body#(}"; body="${body%(\\s|\$)}"; body="${body%)}"
+            printf '%s' "$body" | awk '{
+              depth=0; br="";
+              for(i=1;i<=length($0);i++){c=substr($0,i,1);
+                if(c=="(")depth++; else if(c==")")depth--;
+                if(c=="|"&&depth==0){print br; br="";} else br=br c;}
+              print br;
+            }' | while IFS= read -r branch; do
+              if [[ "$branch" == \(* ]]; then
+                inner="${branch#(}"; inner="${inner%%)*}"
+                printf '%s\n' "${inner//|/$'\n'}"
+              else
+                printf '%s\n' "$branch" | sed -n 's/^\([a-z0-9]\{1,\}\).*/\1/p'
+              fi
+            done
+          }
+          if_verbs() { printf '%s' "$1" | grep -oE 'Bash\([^)]*\)' | sed -E 's/^Bash\(//; s/\)$//; s/ ?\*$//'; }
+          ifstr() { jq -r ".hooks.$1[0].hooks[0].\"if\" // \"\"" "$HOOKS_JSON"; }
+          verbs_of() { regex_verbs "$(regex_of "$1")"; }
+          # Fail loud if a regex name no longer resolves. MUST run in the top-level shell (not
+          # inside the $( … | sort) pipelines below): an exit there only kills the subshell and
+          # the script would pass while coverage silently regressed — the invisible-failure
+          # class this check exists to catch.
+          for _name in GATE_RE PYGATE_RE INSTALL_RE GIT_RE PYINSTALL_RE; do
+            [[ -n "$(regex_of "$_name")" ]] || { echo "::error file=$HOOK::regex $_name not found (renamed?) — cannot verify if-coverage"; exit 1; }
+          done
+          fail=0
+          assert_superset() {  # $1=event  $2=required(newline)  $3=covered(newline)
+            local label="$1" required="$2" covered="$3" v
+            while IFS= read -r v; do
+              [[ -z "$v" ]] && continue
+              if ! printf '%s\n' "$covered" | grep -qxF "$v"; then
+                echo "::error file=hooks/hooks.json::$label if-glob does not cover gated verb '$v' (if narrower than regex — the hook would silently never fire for it; add Bash($v *) to the if)"
+                fail=1
+              fi
+            done <<< "$required"
+          }
+          PRE_REQ=$( { verbs_of GATE_RE; verbs_of PYGATE_RE; } | sort -u )
+          POST_REQ=$( { verbs_of INSTALL_RE; verbs_of GIT_RE; verbs_of PYINSTALL_RE; } | sort -u )
+          assert_superset "PreToolUse"  "$PRE_REQ"  "$(if_verbs "$(ifstr PreToolUse)")"
+          assert_superset "PostToolUse" "$POST_REQ" "$(if_verbs "$(ifstr PostToolUse)")"
+          if [[ "$fail" == 0 ]]; then
+            echo "if ⊇ regex OK — PreToolUse: $(echo "$PRE_REQ" | tr '\n' ' ')"
+            echo "                PostToolUse: $(echo "$POST_REQ" | tr '\n' ' ')"
+          fi
+          exit "$fail"
+
       # Versioning is manual; this tripwire turns "forgot to bump" into a red X
       # instead of silent drift. Behavior lives in scripts/ + hooks/ -- docs- and
       # CI-only PRs need no bump. Diffs against the PR's recorded base SHA (exact

@@ -316,14 +316,37 @@ _in_list() { local n="$1"; shift; local x; for x in "$@"; do [[ "$x" == "$n" ]] 
 
 # ══ TIER 0: persistence + agent-hook injection — cheap stats, ALWAYS, NEVER cached ══
 
+# Shared frame for the pure path-existence persistence alerts (the WORMHOOK_PERSIST_* table
+# groups). Each campaign supplies only its verbatim TITLE, a LEAD ("Found … at: <path>" plus a
+# one/two-line explanation), and a numbered STEPS block; this builder wraps them in the common
+# skeleton — the self-omitting "Command blocked: <cmd>" line (empty on command-less events such
+# as SessionStart/UserPromptSubmit) and the "Immediate steps:" header. Collapses six
+# near-identical alert+heredoc frames to one call each, so a change to the skeleton is a single
+# edit. The bespoke config-injection / git-hook / .pth / .so bodies below do NOT use this (their
+# structure differs — no uniform "Found path → steps" shape) and stay inline.
+#   bash 3.2 note: the builder owns the ONLY heredoc here, and its literal text has no
+#   apostrophe, so the $(cat <<BODY) command-substitution gotcha cannot trip. The per-campaign
+#   LEAD/STEPS arrive as ordinary double-quoted args (apostrophes + balanced quotes are data,
+#   never parsed), so the verbatim remediation text needs no apostrophe gymnastics.
+persistence_check() {  # $1=title  $2=lead  $3=numbered-steps
+  alert "$1" "$(cat <<BODY
+$2
+${COMMAND:+Command blocked: $COMMAND}
+
+Immediate steps:
+$3
+BODY
+)"
+}
+
 # Persistence-path IOC table driver. The WORMHOOK_PERSIST_* parallel arrays (single
 # source of truth in malware-patterns.sh) hold the pure path-EXISTENCE IOCs — a file/dir
 # whose mere presence means a payload already ran. _persist_scan takes a list of group
 # INDICES, and for each group finds the FIRST member path that exists (after substituting
 # the __HOME__/__CWD__ placeholders) into WH_PERSIST_HIT, then `case`s on the group key to
-# emit that group's verbatim alert. Indices are passed (not a blanket loop) so the table
-# checks fire in their HISTORICAL order, interleaved with the inline content-based checks
-# (agent-config / git-hook scans) that sit between them — preserving alert output order.
+# emit that group's verbatim alert via persistence_check. Indices are passed (not a blanket
+# loop) so the table checks fire in their HISTORICAL order, interleaved with the inline
+# content-based checks (agent-config / git-hook scans) that sit between them — preserving order.
 WH_PERSIST_HIT=""
 _persist_scan() {
   local _i _op _path _candidates _c
@@ -344,67 +367,49 @@ _persist_scan() {
     [[ -z "$WH_PERSIST_HIT" ]] && continue
     case "${WORMHOOK_PERSIST_KEYS[$_i]}" in
       axios_rat)
-        alert "AXIOS RAT PERSISTENCE DETECTED" "$(cat <<BODY
-Found Axios/plain-crypto-js RAT binary at: /Library/Caches/com.apple.act.mond
-This file masquerades as an Apple daemon but is a DPRK (Sapphire Sleet) RAT.
-${COMMAND:+Command blocked: $COMMAND}
-
-Immediate steps:
-  1. Kill: sudo pkill -f com.apple.act.mond
+        persistence_check "AXIOS RAT PERSISTENCE DETECTED" \
+          "Found Axios/plain-crypto-js RAT binary at: /Library/Caches/com.apple.act.mond
+This file masquerades as an Apple daemon but is a DPRK (Sapphire Sleet) RAT." \
+          "  1. Kill: sudo pkill -f com.apple.act.mond
   2. Remove: sudo rm -f /Library/Caches/com.apple.act.mond
   3. Rotate ALL credentials (GitHub, npm, Cloudflare, SSH keys)
   4. Check: ps aux | grep -E 'act\.mond|sfrclak' (other persistence)
-  5. Report: support@npmjs.com
-BODY
-)"
+  5. Report: support@npmjs.com"
         ;;
       shai_hulud_2)
-        alert "SHAI-HULUD 2.0 PERSISTENCE DETECTED" "$(cat <<BODY
-Found Shai-Hulud 2.0 runner install at: $HOME/.dev-env
-This directory contains a malicious GitHub Actions runner used for credential exfil.
-
-Immediate steps:
-  1. Remove: command rm -rf "$HOME/.dev-env"
+        persistence_check "SHAI-HULUD 2.0 PERSISTENCE DETECTED" \
+          "Found Shai-Hulud 2.0 runner install at: $HOME/.dev-env
+This directory contains a malicious GitHub Actions runner used for credential exfil." \
+          "  1. Remove: command rm -rf \"$HOME/.dev-env\"
   2. Rotate ALL credentials (GitHub, npm, cloud providers)
   3. Check GitHub for repos matching [0-9a-z]{18} with stolen creds
-  4. Check: ps aux | grep actions-runner
-BODY
-)"
+  4. Check: ps aux | grep actions-runner"
         ;;
       agent_hijack)
         # Agent-hijack dropper FILES (Mini Shai-Hulud). A poisoned file in ~/.claude/
         # re-runs on every launch and, if that dir is synced across machines, would
         # PROPAGATE — so the table checks both $HOME and the project dir.
-        alert "AGENT-HIJACK PERSISTENCE DETECTED" "$(cat <<BODY
-Found Mini Shai-Hulud agent-hijack dropper: $WH_PERSIST_HIT
+        persistence_check "AGENT-HIJACK PERSISTENCE DETECTED" \
+          "Found Mini Shai-Hulud agent-hijack dropper: $WH_PERSIST_HIT
 This installs into an AI-agent/editor config dir and wires a SessionStart hook so
-the credential-stealer re-runs on every Claude Code / VS Code launch.
-${COMMAND:+Command blocked: $COMMAND}
-
-Immediate steps:
-  1. Remove: command rm -f "$WH_PERSIST_HIT"
+the credential-stealer re-runs on every Claude Code / VS Code launch." \
+          "  1. Remove: command rm -f \"$WH_PERSIST_HIT\"
   2. Inspect SessionStart/PreToolUse hooks in .claude/settings.json (project AND
      ~/.claude/settings.json) for entries you did not add — the dropper injects one
   3. If ~/.claude/ is hit and you sync that dir across machines: STOP — do not
      sync (it would propagate). Clean the synced source first, then re-sync.
   4. Rotate: npm tokens, GitHub PATs/OIDC trusts, SSH keys, cloud creds
-  5. git log --all --since="2026-04-01" for unexpected commits / impersonation
-BODY
-)"
+  5. git log --all --since=\"2026-04-01\" for unexpected commits / impersonation"
         ;;
       gh_token_monitor)
         # gh-token-monitor persistence (LaunchAgent / systemd user unit).
-        alert "GH-TOKEN-MONITOR PERSISTENCE DETECTED" "$(cat <<BODY
-Found Shai-Hulud token-monitor persistence unit: $WH_PERSIST_HIT
-This re-launches a GitHub-token harvester on login.
-
-Immediate steps:
-  1. Unload: launchctl unload "$WH_PERSIST_HIT" 2>/dev/null; command rm -f "$WH_PERSIST_HIT"
-     (Linux: systemctl --user disable --now gh-token-monitor; rm "$WH_PERSIST_HIT")
+        persistence_check "GH-TOKEN-MONITOR PERSISTENCE DETECTED" \
+          "Found Shai-Hulud token-monitor persistence unit: $WH_PERSIST_HIT
+This re-launches a GitHub-token harvester on login." \
+          "  1. Unload: launchctl unload \"$WH_PERSIST_HIT\" 2>/dev/null; command rm -f \"$WH_PERSIST_HIT\"
+     (Linux: systemctl --user disable --now gh-token-monitor; rm \"$WH_PERSIST_HIT\")
   2. Rotate ALL GitHub PATs/OIDC trusts and npm tokens
-  3. Check: ps aux | grep -i gh-token
-BODY
-)"
+  3. Check: ps aux | grep -i gh-token"
         ;;
       kitty_monitor)
         # kitty-monitor persistence (AntV/TeamPCP wave). A background daemon (cat.py)
@@ -413,41 +418,31 @@ BODY
         # GitHub commit-search API hourly for attacker commands. Same class as
         # gh-token-monitor above; the unit names and the cat.py path are campaign-specific
         # (Snyk AntV, verbatim).
-        alert "KITTY-MONITOR PERSISTENCE DETECTED" "$(cat <<BODY
-Found AntV/TeamPCP-wave persistence artifact: $WH_PERSIST_HIT
+        persistence_check "KITTY-MONITOR PERSISTENCE DETECTED" \
+          "Found AntV/TeamPCP-wave persistence artifact: $WH_PERSIST_HIT
 This installs a background daemon (~/.local/share/kitty/cat.py) that polls the GitHub
 commit-search API hourly for attacker commands — its presence means the payload has
-ALREADY run on this machine.
-${COMMAND:+Command blocked: $COMMAND}
-
-Immediate steps:
-  1. Unload: launchctl unload "\$HOME/Library/LaunchAgents/com.user.kitty-monitor.plist" 2>/dev/null
+ALREADY run on this machine." \
+          "  1. Unload: launchctl unload \"\$HOME/Library/LaunchAgents/com.user.kitty-monitor.plist\" 2>/dev/null
      (Linux: systemctl --user disable --now kitty-monitor)
-  2. Remove: command rm -f "\$HOME/Library/LaunchAgents/com.user.kitty-monitor.plist" \\
-       "\$HOME/.config/systemd/user/kitty-monitor.service" "\$HOME/.local/share/kitty/cat.py"
+  2. Remove: command rm -f \"\$HOME/Library/LaunchAgents/com.user.kitty-monitor.plist\" \\
+       \"\$HOME/.config/systemd/user/kitty-monitor.service\" \"\$HOME/.local/share/kitty/cat.py\"
   3. Check: ps aux | grep -iE 'kitty.*cat\.py|cat\.py' (kill any running daemon)
   4. Rotate ALL GitHub PATs/OIDC trusts, npm tokens, SSH keys, cloud + LLM API keys
-  5. git log --all --since="2026-04-01" for unexpected commits / impersonation
-BODY
-)"
+  5. git log --all --since=\"2026-04-01\" for unexpected commits / impersonation"
         ;;
       hades_ssh)
         # Hades/Miasma SSH-propagation dropper (PyPI wave). The JS stealer writes this
         # to spread over SSH to other hosts — its presence means the payload already ran.
-        alert "HADES SSH-PROPAGATION DROPPER DETECTED" "$(cat <<BODY
-Found Hades/Miasma SSH-propagation dropper at: /tmp/.sshu-setup.js
+        persistence_check "HADES SSH-PROPAGATION DROPPER DETECTED" \
+          "Found Hades/Miasma SSH-propagation dropper at: /tmp/.sshu-setup.js
 This is written by the Bun-staged JS stealer to spread over SSH to other hosts —
-its presence means the payload has ALREADY run on this machine.
-${COMMAND:+Command blocked: $COMMAND}
-
-Immediate steps:
-  1. Remove: command rm -f /tmp/.sshu-setup.js
+its presence means the payload has ALREADY run on this machine." \
+          "  1. Remove: command rm -f /tmp/.sshu-setup.js
   2. Check: ps aux | grep -iE 'bun|_index\.js' (kill any running stager)
   3. Audit ~/.ssh/known_hosts + authorized_keys and recent SSH egress for spread
   4. Rotate ALL credentials (SSH keys, GitHub PATs/OIDC, npm/PyPI tokens, cloud)
-  5. Inspect site-packages *.pth startup hooks (the PyPI delivery vector)
-BODY
-)"
+  5. Inspect site-packages *.pth startup hooks (the PyPI delivery vector)"
         ;;
     esac
   done

@@ -55,6 +55,11 @@
 #   Tier 2 (node_modules content/IOC scan): expensive, run only when deps changed
 #           (install-class PostToolUse, or SessionStart with a stale cache marker).
 # A poisoned ~/.claude hook re-runs on every launch, so Tier 0 must outrank the cache.
+# Tier 0's pure path-existence IOCs (the known-bad files/dirs whose mere presence means a
+# payload already ran) are NOT hardcoded here — they live in the WORMHOOK_PERSIST_* parallel
+# arrays in malware-patterns.sh (single source of truth); _persist_scan below is just the
+# iterator. The content/behavioral persistence checks (.pth, .abi3.so, git-hook bodies,
+# agent-config injection) stay inline because they inspect file CONTENTS, not just existence.
 
 set -uo pipefail
 
@@ -311,9 +316,35 @@ _in_list() { local n="$1"; shift; local x; for x in "$@"; do [[ "$x" == "$n" ]] 
 
 # ══ TIER 0: persistence + agent-hook injection — cheap stats, ALWAYS, NEVER cached ══
 
-# Axios/plain-crypto-js RAT persistence (macOS).
-if [[ -f "/Library/Caches/com.apple.act.mond" ]]; then
-  alert "AXIOS RAT PERSISTENCE DETECTED" "$(cat <<BODY
+# Persistence-path IOC table driver. The WORMHOOK_PERSIST_* parallel arrays (single
+# source of truth in malware-patterns.sh) hold the pure path-EXISTENCE IOCs — a file/dir
+# whose mere presence means a payload already ran. _persist_scan takes a list of group
+# INDICES, and for each group finds the FIRST member path that exists (after substituting
+# the __HOME__/__CWD__ placeholders) into WH_PERSIST_HIT, then `case`s on the group key to
+# emit that group's verbatim alert. Indices are passed (not a blanket loop) so the table
+# checks fire in their HISTORICAL order, interleaved with the inline content-based checks
+# (agent-config / git-hook scans) that sit between them — preserving alert output order.
+WH_PERSIST_HIT=""
+_persist_scan() {
+  local _i _op _path _candidates _c
+  for _i in "$@"; do
+    _op="${WORMHOOK_PERSIST_TEST[$_i]}"
+    # Word-split the space-separated path list (no path contains a space) after
+    # expanding the placeholders. Safe under set -u: an empty element cannot occur.
+    _candidates="${WORMHOOK_PERSIST_PATHS[$_i]}"
+    _candidates="${_candidates//__HOME__/$HOME}"
+    _candidates="${_candidates//__CWD__/$CWD}"
+    WH_PERSIST_HIT=""
+    # shellcheck disable=SC2086  # intentional split on spaces into candidate paths
+    for _c in $_candidates; do
+      if [[ "$_op" == "-f" && -f "$_c" ]] || [[ "$_op" == "-d" && -d "$_c" ]] || [[ "$_op" == "-e" && -e "$_c" ]]; then
+        WH_PERSIST_HIT="$_c"; break
+      fi
+    done
+    [[ -z "$WH_PERSIST_HIT" ]] && continue
+    case "${WORMHOOK_PERSIST_KEYS[$_i]}" in
+      axios_rat)
+        alert "AXIOS RAT PERSISTENCE DETECTED" "$(cat <<BODY
 Found Axios/plain-crypto-js RAT binary at: /Library/Caches/com.apple.act.mond
 This file masquerades as an Apple daemon but is a DPRK (Sapphire Sleet) RAT.
 ${COMMAND:+Command blocked: $COMMAND}
@@ -326,11 +357,9 @@ Immediate steps:
   5. Report: support@npmjs.com
 BODY
 )"
-fi
-
-# Shai-Hulud 2.0 GitHub-runner install.
-if [[ -d "$HOME/.dev-env" ]]; then
-  alert "SHAI-HULUD 2.0 PERSISTENCE DETECTED" "$(cat <<BODY
+        ;;
+      shai_hulud_2)
+        alert "SHAI-HULUD 2.0 PERSISTENCE DETECTED" "$(cat <<BODY
 Found Shai-Hulud 2.0 runner install at: $HOME/.dev-env
 This directory contains a malicious GitHub Actions runner used for credential exfil.
 
@@ -341,24 +370,19 @@ Immediate steps:
   4. Check: ps aux | grep actions-runner
 BODY
 )"
-fi
-
-# Agent-hijack dropper FILES (Mini Shai-Hulud). A poisoned file in ~/.claude/ re-runs
-# on every launch and, if that dir is synced across machines, would PROPAGATE — so
-# check both $HOME and the project dir.
-for hp in \
-  "${CWD}/.claude/setup.mjs"   "${CWD}/.claude/router_runtime.js" \
-  "${CWD}/.vscode/setup.mjs"   "${CWD}/.vscode/router_runtime.js" \
-  "${HOME}/.claude/setup.mjs"  "${HOME}/.claude/router_runtime.js"; do
-  [[ -e "$hp" ]] || continue
-  alert "AGENT-HIJACK PERSISTENCE DETECTED" "$(cat <<BODY
-Found Mini Shai-Hulud agent-hijack dropper: $hp
+        ;;
+      agent_hijack)
+        # Agent-hijack dropper FILES (Mini Shai-Hulud). A poisoned file in ~/.claude/
+        # re-runs on every launch and, if that dir is synced across machines, would
+        # PROPAGATE — so the table checks both $HOME and the project dir.
+        alert "AGENT-HIJACK PERSISTENCE DETECTED" "$(cat <<BODY
+Found Mini Shai-Hulud agent-hijack dropper: $WH_PERSIST_HIT
 This installs into an AI-agent/editor config dir and wires a SessionStart hook so
 the credential-stealer re-runs on every Claude Code / VS Code launch.
 ${COMMAND:+Command blocked: $COMMAND}
 
 Immediate steps:
-  1. Remove: command rm -f "$hp"
+  1. Remove: command rm -f "$WH_PERSIST_HIT"
   2. Inspect SessionStart/PreToolUse hooks in .claude/settings.json (project AND
      ~/.claude/settings.json) for entries you did not add — the dropper injects one
   3. If ~/.claude/ is hit and you sync that dir across machines: STOP — do not
@@ -367,7 +391,71 @@ Immediate steps:
   5. git log --all --since="2026-04-01" for unexpected commits / impersonation
 BODY
 )"
-done
+        ;;
+      gh_token_monitor)
+        # gh-token-monitor persistence (LaunchAgent / systemd user unit).
+        alert "GH-TOKEN-MONITOR PERSISTENCE DETECTED" "$(cat <<BODY
+Found Shai-Hulud token-monitor persistence unit: $WH_PERSIST_HIT
+This re-launches a GitHub-token harvester on login.
+
+Immediate steps:
+  1. Unload: launchctl unload "$WH_PERSIST_HIT" 2>/dev/null; command rm -f "$WH_PERSIST_HIT"
+     (Linux: systemctl --user disable --now gh-token-monitor; rm "$WH_PERSIST_HIT")
+  2. Rotate ALL GitHub PATs/OIDC trusts and npm tokens
+  3. Check: ps aux | grep -i gh-token
+BODY
+)"
+        ;;
+      kitty_monitor)
+        # kitty-monitor persistence (AntV/TeamPCP wave). A background daemon (cat.py)
+        # is installed under ~/.local/share/kitty/ and registered as a login-persistent
+        # unit — a LaunchAgent on macOS, a systemd user service on Linux — that polls the
+        # GitHub commit-search API hourly for attacker commands. Same class as
+        # gh-token-monitor above; the unit names and the cat.py path are campaign-specific
+        # (Snyk AntV, verbatim).
+        alert "KITTY-MONITOR PERSISTENCE DETECTED" "$(cat <<BODY
+Found AntV/TeamPCP-wave persistence artifact: $WH_PERSIST_HIT
+This installs a background daemon (~/.local/share/kitty/cat.py) that polls the GitHub
+commit-search API hourly for attacker commands — its presence means the payload has
+ALREADY run on this machine.
+${COMMAND:+Command blocked: $COMMAND}
+
+Immediate steps:
+  1. Unload: launchctl unload "\$HOME/Library/LaunchAgents/com.user.kitty-monitor.plist" 2>/dev/null
+     (Linux: systemctl --user disable --now kitty-monitor)
+  2. Remove: command rm -f "\$HOME/Library/LaunchAgents/com.user.kitty-monitor.plist" \\
+       "\$HOME/.config/systemd/user/kitty-monitor.service" "\$HOME/.local/share/kitty/cat.py"
+  3. Check: ps aux | grep -iE 'kitty.*cat\.py|cat\.py' (kill any running daemon)
+  4. Rotate ALL GitHub PATs/OIDC trusts, npm tokens, SSH keys, cloud + LLM API keys
+  5. git log --all --since="2026-04-01" for unexpected commits / impersonation
+BODY
+)"
+        ;;
+      hades_ssh)
+        # Hades/Miasma SSH-propagation dropper (PyPI wave). The JS stealer writes this
+        # to spread over SSH to other hosts — its presence means the payload already ran.
+        alert "HADES SSH-PROPAGATION DROPPER DETECTED" "$(cat <<BODY
+Found Hades/Miasma SSH-propagation dropper at: /tmp/.sshu-setup.js
+This is written by the Bun-staged JS stealer to spread over SSH to other hosts —
+its presence means the payload has ALREADY run on this machine.
+${COMMAND:+Command blocked: $COMMAND}
+
+Immediate steps:
+  1. Remove: command rm -f /tmp/.sshu-setup.js
+  2. Check: ps aux | grep -iE 'bun|_index\.js' (kill any running stager)
+  3. Audit ~/.ssh/known_hosts + authorized_keys and recent SSH egress for spread
+  4. Rotate ALL credentials (SSH keys, GitHub PATs/OIDC, npm/PyPI tokens, cloud)
+  5. Inspect site-packages *.pth startup hooks (the PyPI delivery vector)
+BODY
+)"
+        ;;
+    esac
+  done
+}
+
+# Indices 0-2: axios_rat, shai_hulud_2, agent_hijack — fire BEFORE the inline
+# agent-config / git-hook content scans below (preserves historical alert order).
+_persist_scan 0 1 2
 
 # Agent-config injection CHAIN: the dropper wires itself into an AI-agent/editor
 # config so it re-runs on launch — as a SessionStart hook (Mini Shai-Hulud) OR a
@@ -445,71 +533,12 @@ BODY
   done
 done
 
-# gh-token-monitor persistence (LaunchAgent / systemd user unit).
-for gp in \
-  "${HOME}/Library/LaunchAgents/com.user.gh-token-monitor.plist" \
-  "${HOME}/.config/systemd/user/gh-token-monitor.service"; do
-  [[ -e "$gp" ]] || continue
-  alert "GH-TOKEN-MONITOR PERSISTENCE DETECTED" "$(cat <<BODY
-Found Shai-Hulud token-monitor persistence unit: $gp
-This re-launches a GitHub-token harvester on login.
+# Indices 3-4: gh_token_monitor, kitty_monitor — fire AFTER the git-hook scan, in
+# their historical order (preserving accumulated alert order).
+_persist_scan 3 4
 
-Immediate steps:
-  1. Unload: launchctl unload "$gp" 2>/dev/null; command rm -f "$gp"
-     (Linux: systemctl --user disable --now gh-token-monitor; rm "$gp")
-  2. Rotate ALL GitHub PATs/OIDC trusts and npm tokens
-  3. Check: ps aux | grep -i gh-token
-BODY
-)"
-done
-
-# kitty-monitor persistence (AntV/TeamPCP wave). A background daemon (cat.py) is
-# installed under ~/.local/share/kitty/ and registered as a login-persistent unit —
-# a LaunchAgent on macOS, a systemd user service on Linux — that polls the GitHub
-# commit-search API hourly for attacker commands. Same class as gh-token-monitor above;
-# the unit names and the cat.py path are campaign-specific (Snyk AntV, verbatim).
-for kp in \
-  "${HOME}/Library/LaunchAgents/com.user.kitty-monitor.plist" \
-  "${HOME}/.config/systemd/user/kitty-monitor.service" \
-  "${HOME}/.local/share/kitty/cat.py"; do
-  [[ -e "$kp" ]] || continue
-  alert "KITTY-MONITOR PERSISTENCE DETECTED" "$(cat <<BODY
-Found AntV/TeamPCP-wave persistence artifact: $kp
-This installs a background daemon (~/.local/share/kitty/cat.py) that polls the GitHub
-commit-search API hourly for attacker commands — its presence means the payload has
-ALREADY run on this machine.
-${COMMAND:+Command blocked: $COMMAND}
-
-Immediate steps:
-  1. Unload: launchctl unload "\$HOME/Library/LaunchAgents/com.user.kitty-monitor.plist" 2>/dev/null
-     (Linux: systemctl --user disable --now kitty-monitor)
-  2. Remove: command rm -f "\$HOME/Library/LaunchAgents/com.user.kitty-monitor.plist" \\
-       "\$HOME/.config/systemd/user/kitty-monitor.service" "\$HOME/.local/share/kitty/cat.py"
-  3. Check: ps aux | grep -iE 'kitty.*cat\.py|cat\.py' (kill any running daemon)
-  4. Rotate ALL GitHub PATs/OIDC trusts, npm tokens, SSH keys, cloud + LLM API keys
-  5. git log --all --since="2026-04-01" for unexpected commits / impersonation
-BODY
-)"
-done
-
-# Hades/Miasma SSH-propagation dropper (PyPI wave). The JS stealer writes this to
-# spread over SSH to other hosts — its presence means the payload already executed.
-if [[ -f "/tmp/.sshu-setup.js" ]]; then
-  alert "HADES SSH-PROPAGATION DROPPER DETECTED" "$(cat <<BODY
-Found Hades/Miasma SSH-propagation dropper at: /tmp/.sshu-setup.js
-This is written by the Bun-staged JS stealer to spread over SSH to other hosts —
-its presence means the payload has ALREADY run on this machine.
-${COMMAND:+Command blocked: $COMMAND}
-
-Immediate steps:
-  1. Remove: command rm -f /tmp/.sshu-setup.js
-  2. Check: ps aux | grep -iE 'bun|_index\.js' (kill any running stager)
-  3. Audit ~/.ssh/known_hosts + authorized_keys and recent SSH egress for spread
-  4. Rotate ALL credentials (SSH keys, GitHub PATs/OIDC, npm/PyPI tokens, cloud)
-  5. Inspect site-packages *.pth startup hooks (the PyPI delivery vector)
-BODY
-)"
-fi
+# Index 5: hades_ssh — the SSH-propagation dropper, just before the .pth/.so scans.
+_persist_scan 5
 
 # Weaponized Python .pth startup hook (Hades/Miasma PyPI wave). A malicious PyPI
 # package (MCP typosquats like openai-mcp / langchain-core-mcp) drops a *.pth into

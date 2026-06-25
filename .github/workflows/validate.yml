@@ -63,7 +63,19 @@ jobs:
           # whole product, and SC2015-class footguns are exactly what we want red.
           # scripts/doctor/*.sh (the split SessionStart checks) are NOT covered by the
           # non-recursive scripts/*.sh glob -- list the subdir explicitly.
-          shellcheck scripts/*.sh scripts/doctor/*.sh
+          shellcheck scripts/*.sh scripts/doctor/*.sh tests/*.sh
+
+      # Fixtures seam over the engine: {synthetic payload + planted files in a temp
+      # CWD} -> assert on the emitted verdict JSON. Proves the engine DETECTS the
+      # campaigns it claims (per-tier positives), holds its FP exclusions (the
+      # adc-e.uk partition-table collision fixed in v0.15.2), keeps the two block-
+      # event emission shapes distinct (PreToolUse deny vs UserPromptSubmit block),
+      # and that the installed git-hook body never self-flags (the CLAUDE.md
+      # "Verified by test" claim). Zero network; each case is hermetic ($HOME +
+      # XDG_CACHE_HOME redirected into a temp dir). A wrong verdict exits non-zero
+      # and fails the build.
+      - name: Run engine fixtures harness
+        run: bash tests/run.sh
 
       # Presence-assert for the split doctor checks. The jq-missing "scans are OFF" 🔴
       # alarm is owned solely by doctor/deps.sh (every other check stays silent when jq

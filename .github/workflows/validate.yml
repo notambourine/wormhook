@@ -19,7 +19,7 @@ jobs:
       # log shows observed endpoints. Graduate to egress-policy: block + an
       # allowed-endpoints allowlist once a few audit runs have mapped the egress.
       # Community tier is public-repos-only — applies here (wormhook is public).
-      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+      - uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
         with:
           egress-policy: audit
 
@@ -212,7 +212,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+      - uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
         with:
           egress-policy: audit
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -236,7 +236,7 @@ jobs:
   # .tripwire-allow so CI and the local SessionStart tripwire hook agree on what is a
   # documented-IOC false positive (filename/hash/lifecycle hits are never exempted).
   tripwire:
-    uses: notambourine/shai-hulud-tripwire/.github/workflows/tripwire.yml@be65cdd4c400f998a0145b1d6c9f177e472f0e81 # v1.1.0
+    uses: notambourine/shai-hulud-tripwire/.github/workflows/tripwire.yml@6ee8deb3ee3af134921724a30f22ee30d08634cb # v1.1.1
     permissions:
       contents: read
     with:

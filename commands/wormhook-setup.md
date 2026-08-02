@@ -38,7 +38,10 @@ installed:
   call that out and let them decline.
 - **Hourly sweep** — a launchd LaunchAgent that scans your repos hourly in the background
   (local, **zero LLM tokens**), with a desktop notification + logfile on any finding. (macOS
-  only; on Linux it prints a systemd/cron line instead.)
+  only; on Linux it prints a systemd/cron line instead.) If they pick this, also ask whether
+  the sweep should **quarantine** exact-match persistence artifacts it finds
+  (`--quarantine`: reversible rename + `chmod 000`, behavioral matches stay report-only) —
+  default is report-only; never preselect quarantine.
 
 If no config file exists yet (per `status`), also ask where they keep their git repos — offer
 common roots (`~/code`, `~/sandbox/git-repos`, `~/work`) plus "Other" for a custom path/glob.
@@ -49,7 +52,8 @@ common roots (`~/code`, `~/sandbox/git-repos`, `~/work`) plus "Other" for a cust
   as its own line to the config file shown by `status` (e.g. `~/code/*/`). Confirm the path.
 - **CLI**: `bash "$SCRIPT" install-cli` — then note if `~/.local/bin` is not on their `$PATH`.
 - **Git-pull audit**: `bash "$SCRIPT" install-git-hook`.
-- **Hourly sweep**: `bash "$SCRIPT" install-launchd` (mention `--every SECONDS` to retune).
+- **Hourly sweep**: `bash "$SCRIPT" install-launchd` (mention `--every SECONDS` to retune;
+  append `--quarantine` only if they opted in).
 
 ## 4. Confirm
 

@@ -100,6 +100,19 @@ jobs:
           done
           echo "registered doctor checks present + executable; deps.sh first"
 
+      # The integrity light (doctor/integrity.sh, issue #61) verifies the engine +
+      # signature corpus against scripts/integrity.sha256 at every SessionStart. This
+      # keeps the manifest honest: an engine edit that forgets to regenerate it would
+      # otherwise ship a permanent false-🔴 to every install. Combined with the
+      # version-bump tripwire below, an engine change needs BOTH a fresh manifest and
+      # a version move to go green.
+      - name: Verify integrity manifest matches the engine
+        run: |
+          (cd scripts && shasum -a 256 -c integrity.sha256) || {
+            echo "::error file=scripts/integrity.sha256::stale integrity manifest — regenerate: (cd scripts && shasum -a 256 wormhook.sh malware-patterns.sh > integrity.sha256)"
+            exit 1
+          }
+
       # Makes the "Two sources of truth" invariant executable (CLAUDE.md): which commands
       # trigger a scan is encoded twice — the *_RE regexes in wormhook.sh (the precise gate)
       # and the `if` globs in hooks.json (the coarse perf pre-filter). The contract is `if` ⊇

@@ -341,6 +341,34 @@ FINDINGS=""
 # scan is not a clean scan.
 WARNINGS=""
 warn() { WARNINGS="${WARNINGS:+$WARNINGS; }$1"; }
+
+# ── Opt-in quarantine (issue #59) ─────────────────────────────────────────────
+# WORMHOOK_QUARANTINE=1 (settings.json `env`, or exported for the CLI/launchd sweep)
+# renames an EXACT-MATCH persistence artifact to <path>.wormhook-quarantined.<epoch>
+# + chmod 000 — reversible, forensics-preserving, and stops a .pth/LaunchAgent/dropper
+# firing again. Deliberately NOT kill/unload/delete (containment would invert the
+# fail-open bias; cutting a live process is the network layer / human's job), and
+# deliberately scoped to exact-match IOCs only (the WORMHOOK_PERSIST_* path table,
+# known-bad .pth name/hash, known-bad .abi3.so basenames) — behavioral matches stay
+# report-only per the FP-tolerance invariant. Fail open: a failed rename (root-owned
+# artifact, RO fs) degrades to the normal advisory alert with a note. Default off.
+WORMHOOK_QUARANTINE="${WORMHOOK_QUARANTINE:-}"
+QUARANTINE_LOG="$CACHE_DIR/quarantine.log"
+WH_QUAR_NOTE=""
+_quarantine() {  # $1 = exact-match artifact path -> WH_QUAR_NOTE (one line for the alert body)
+  WH_QUAR_NOTE=""
+  [[ -n "$WORMHOOK_QUARANTINE" ]] || return 0
+  local dest
+  dest="$1.wormhook-quarantined.$(date +%s)"
+  if mv "$1" "$dest" 2>/dev/null; then
+    chmod 000 "$dest" 2>/dev/null || true
+    WH_QUAR_NOTE="QUARANTINED (reversible): renamed to $dest + chmod 000. It can no longer fire."
+    mkdir -p "$CACHE_DIR" 2>/dev/null && printf '%s\t%s\t%s\n' \
+      "$(date '+%Y-%m-%dT%H:%M:%S')" "$1" "$dest" >> "$QUARANTINE_LOG" 2>/dev/null
+  else
+    WH_QUAR_NOTE="QUARANTINE FAILED (permissions? root-owned?): artifact is still live — run the steps below manually."
+  fi
+}
 alert() {
   local block
   block=$(cat <<EOF
@@ -403,6 +431,7 @@ _in_list() { local n="$1"; shift; local x; for x in "$@"; do [[ "$x" == "$n" ]] 
 persistence_check() {  # $1=title  $2=lead  $3=numbered-steps
   alert "$1" "$(cat <<BODY
 $2
+${WH_QUAR_NOTE:+$WH_QUAR_NOTE}
 ${COMMAND:+Command blocked: $COMMAND}
 
 Immediate steps:
@@ -437,6 +466,10 @@ _persist_scan() {
       fi
     done
     [[ -z "$WH_PERSIST_HIT" ]] && continue
+    # Every table row is a pure path-existence IOC (exact match by construction), so
+    # each hit is quarantine-eligible. If a group has FURTHER un-hit member paths,
+    # the next scan quarantines the next one — self-converging, one hit per run.
+    _quarantine "$WH_PERSIST_HIT"
     case "${WORMHOOK_PERSIST_KEYS[$_i]}" in
       axios_rat)
         persistence_check "AXIOS RAT PERSISTENCE DETECTED" \
@@ -630,19 +663,38 @@ _persist_scan 5
 # project's venv layouts + any stray committed .pth; legit .pth files only touch
 # sys.path, so MALWARE_PTH_RE (process spawn / socket / URL fetch / bun) is near-0 FP.
 # Seed list for BOTH Python sweeps (.pth here, .abi3.so below). The four
-# conventional names cover committed layouts; $VIRTUAL_ENV covers an ACTIVE venv
-# whatever it is named (venv312, .direnv, a Poetry cache); ~/.local/lib covers
-# `pip install --user` — the no-venv audience the Hades/Miasma MCP typosquats
-# target (issue #58). Global/pyenv/Homebrew prefixes stay out: enumerating them
-# needs `python3 -c 'import site…'`, and starting the interpreter auto-executes
-# the very .pth this sweep exists to gate. -maxdepth 5: site-packages sits at
-# depth 4 (<venv>/lib/python3.12/site-packages), so 4 left zero margin.
+# conventional names cover committed layouts; $VIRTUAL_ENV / $CONDA_PREFIX cover an
+# ACTIVE env whatever it is named (venv312, .direnv, a Poetry cache, a conda env);
+# the user/global globs below cover `pip install` OUTSIDE any venv — the exact
+# audience the Hades/Miasma MCP typosquats target (issue #58). Global prefixes are
+# enumerated by GLOB, not by asking an interpreter: `python3 -I -S -c 'import site…'`
+# is verified safe (-S suppresses .pth processing, even through an explicit
+# `import site`), but it reports only the ONE resolved interpreter — a pyenv/uv
+# machine has N others — and costs a spawn on every event including each prompt
+# turn. The globs cover every installed layout at stat cost; a prefix that does
+# not exist adds nothing. /usr/lib (apt-owned, root-only, pip never writes there)
+# stays out. -maxdepth 5: site-packages sits at depth 4 under a venv root
+# (<venv>/lib/python3.12/site-packages), so 4 left zero margin.
 py_roots=("${CWD}/.venv" "${CWD}/venv" "${CWD}/env" "${CWD}/.tox")
 case "${VIRTUAL_ENV:-}" in
   ""|"${CWD}/.venv"|"${CWD}/venv"|"${CWD}/env"|"${CWD}/.tox") : ;;  # empty or already seeded
   *) [[ -d "$VIRTUAL_ENV" ]] && py_roots+=("$VIRTUAL_ENV") ;;
 esac
-for _u in "$HOME"/.local/lib/python*/site-packages; do [[ -d "$_u" ]] && py_roots+=("$_u"); done
+[[ -n "${CONDA_PREFIX:-}" && -d "${CONDA_PREFIX:-}" ]] && py_roots+=("$CONDA_PREFIX")
+# User + global site-packages (issue #58): ~/.local (pip --user, Linux),
+# ~/Library/Python (pip --user, macOS framework python), Homebrew (ARM + Intel),
+# /usr/local {site,dist}-packages (sudo pip / Debian), python.org framework
+# installs, every pyenv version, every uv-managed interpreter.
+for _u in "$HOME"/.local/lib/python*/site-packages \
+          "$HOME"/Library/Python/*/lib/python/site-packages \
+          /opt/homebrew/lib/python*/site-packages \
+          /usr/local/lib/python*/site-packages \
+          /usr/local/lib/python*/dist-packages \
+          /Library/Frameworks/Python.framework/Versions/*/lib/python*/site-packages \
+          "$HOME"/.pyenv/versions/*/lib/python*/site-packages \
+          "$HOME"/.local/share/uv/python/*/lib/python*/site-packages; do
+  [[ -d "$_u" ]] && py_roots+=("$_u")
+done
 pth_files=()
 while IFS= read -r _p; do [[ -n "$_p" ]] && pth_files+=("$_p"); done < <(
   timeout 5 find "${py_roots[@]}" -maxdepth 5 -name '*.pth' -type f 2>/dev/null
@@ -650,20 +702,24 @@ while IFS= read -r _p; do [[ -n "$_p" ]] && pth_files+=("$_p"); done < <(
 for _p in "${CWD}"/*.pth; do [[ -f "$_p" ]] && pth_files+=("$_p"); done
 if [[ ${#pth_files[@]} -gt 0 ]]; then
   for pth in "${pth_files[@]}"; do
-    pth_reason="" pth_base="${pth##*/}"
+    pth_reason="" pth_base="${pth##*/}" pth_exact=0 WH_QUAR_NOTE=""
     if [[ "$pth_base" == "$MALWARE_PTH_IOC_NAME" ]]; then
-      pth_reason="known-bad filename ($MALWARE_PTH_IOC_NAME)"
+      pth_reason="known-bad filename ($MALWARE_PTH_IOC_NAME)"; pth_exact=1
     elif [[ "$(shasum -a 256 "$pth" 2>/dev/null | awk '{print $1}')" == "$MALWARE_PTH_IOC_HASH" ]]; then
-      pth_reason="known-bad SHA256 ($MALWARE_PTH_IOC_HASH)"
+      pth_reason="known-bad SHA256 ($MALWARE_PTH_IOC_HASH)"; pth_exact=1
     else
       pth_m=$(grep -niE "$MALWARE_PTH_RE" "$pth" 2>/dev/null | head -1)
       [[ -n "$pth_m" ]] && pth_reason="executes code on interpreter start: $pth_m"
     fi
     [[ -z "$pth_reason" ]] && continue
+    # Quarantine only the name/hash IOC matches — a behavioral match is report-only
+    # (the FP-tolerance invariant: an unattended rename demands exact-match confidence).
+    [[ "$pth_exact" == 1 ]] && _quarantine "$pth"
     alert "MALICIOUS PYTHON .pth STARTUP HOOK DETECTED" "$(cat <<BODY
 A Python .pth startup hook runs code on every interpreter start:
   $pth
   $pth_reason
+${WH_QUAR_NOTE:+$WH_QUAR_NOTE}
 ${COMMAND:+Command blocked: $COMMAND}
 The Hades/Miasma PyPI wave (MCP typosquats: openai-mcp, langchain-core-mcp,
 tiktoken-mcp, ...) drops a *.pth into site-packages that downloads Bun and runs a
@@ -700,9 +756,11 @@ for so in "${so_files[@]}"; do
   so_base="${so##*/}" so_bad=0
   for _bad in "${MALWARE_NATIVE_SO_NAMES[@]}"; do [[ "$so_base" == "$_bad" ]] && so_bad=1; done
   [[ "$so_bad" == 1 ]] || continue
+  _quarantine "$so"   # exact-basename IOC (zero FP) => quarantine-eligible
   alert "MALICIOUS NATIVE PYTHON MODULE DETECTED" "$(cat <<BODY
 A compiled Python extension matching a known Hades/Miasma payload is present:
   $so
+${WH_QUAR_NOTE:+$WH_QUAR_NOTE}
 ${COMMAND:+Command blocked: $COMMAND}
 The Hades/Miasma PyPI wave ships native .abi3.so modules that execute a credential
 stealer when Python imports the carrier package — no install step, no .pth needed.

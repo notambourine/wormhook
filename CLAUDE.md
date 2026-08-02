@@ -72,6 +72,20 @@ that aren't obvious from the code.
   `malware-patterns.sh` and README's "deliberately doesn't do". A missed detection is worse
   than a cleared warning: when a real signature is too noisy for the block tier, move it to
   a lower-blast tier rather than discard it.
+- **Quarantine is opt-in, exact-match-only, and reversible.** `WORMHOOK_QUARANTINE=1`
+  (engine env; CLI `--quarantine` / `install-launchd --quarantine` just export it) renames a
+  Tier-0 artifact to `<path>.wormhook-quarantined.<epoch>` + `chmod 000` and logs to the
+  cache dir. Eligible: the `WORMHOOK_PERSIST_*` table hits, known-bad `.pth` name/hash,
+  known-bad `.abi3.so` basenames — **never** a behavioral match (same FP-tolerance rule as
+  the block tier: an unattended rename demands exact-match confidence). Never kill/unload/
+  delete (forensics + fail-open bias); a failed rename degrades to the advisory alert.
+  Default off on every surface — do not promote it to default-on.
+- **The integrity manifest must move with the engine.** `scripts/integrity.sha256` holds
+  the SHA-256 of `wormhook.sh` + `malware-patterns.sh`; `doctor/integrity.sh` verifies it
+  every SessionStart (issue #61 — one appended `exit 0` must not keep the dashboard green).
+  Editing either file ⇒ regenerate: `(cd scripts && shasum -a 256 wormhook.sh
+  malware-patterns.sh > integrity.sha256)` — CI fails on a stale manifest. The tamper 🔴 is
+  NOT silenceable (same class as the jq alarm).
 - **No network calls — ever.** Every tier is local (stat/grep/jq over the filesystem). The
   install-time registry-firewall job (malicious-version blocking, typosquats, publish-age/
   reputation) is **ceded to Socket Firewall (`sfw`) + `safedep/vet`**; `doctor/firewall.sh`
@@ -155,8 +169,9 @@ installer is the `/wormhook-setup` slash command (`commands/wormhook-setup.md`),
 `SessionStart` `doctor/coverage.sh` light points at. Each doctor check emits its own status
 light; a soft nudge is silenceable via `WORMHOOK_SKIP_{RG,SFW,VET,COVERAGE,CICD,DRIFT}=1` (or
 `WORMHOOK_DOCTOR_QUIET=1` for all), set in repo/user `settings.json` `env` — a silenced nudge
-degrades to ⚪, never to actual silence. The jq "scans are OFF" 🔴 (in `doctor/deps.sh`) is
-intentionally **not** silenceable. These invariants hold:
+degrades to ⚪, never to actual silence. The jq "scans are OFF" 🔴 (in `doctor/deps.sh`) and
+the tamper 🔴 (in `doctor/integrity.sh`) are intentionally **not** silenceable. These
+invariants hold:
 
 - **Adapters never duplicate detection.** Every verb drives the *unchanged* `wormhook.sh` by
   synthesizing the same stdin payload Claude sends — `SessionStart` for fast (T0+T1, T2 on
@@ -220,5 +235,7 @@ intentionally **not** silenceable. These invariants hold:
   `echo '{"tool_input":{"command":"git pull"},"cwd":"/tmp/x","hook_event_name":"PostToolUse"}' | bash scripts/wormhook.sh`
 - New campaign → add patterns to `malware-patterns.sh`, update the provenance header in
   `wormhook.sh`, add the Source to `README.md`, bump `plugin.json`.
+- Any edit to `wormhook.sh` or `malware-patterns.sh` → regenerate `scripts/integrity.sha256`
+  (see Invariants) or CI goes red.
 - New **command class** (a new gated verb) → update **both** the regex in `wormhook.sh`
   *and* the matching `if` glob in `hooks/hooks.json`, keeping `if` ⊇ regex (see above).

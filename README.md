@@ -35,10 +35,10 @@ Requires `jq` and `bash`. [`ripgrep`](https://github.com/BurntSushi/ripgrep) is
 optional but strongly recommended — content scans use it when present (43× faster than
 BSD grep on large trees) and fall back to `grep` otherwise. There's nothing to invoke;
 it runs automatically. At `SessionStart` a row of doctor status lights (🟢/🟡/🔴/⚪, one per
-check, every session) reports your runtime deps, version drift, out-of-band coverage, CI
-supply-chain-gate coverage, the recommended [companion firewalls](#beyond-the-tiers)
-(Socket Firewall / `vet`), and a blast-radius exposure audit — each non-green light carries
-the one-liner to fix it.
+check, every session) reports your runtime deps, [engine self-integrity](#threat-model-the-scanner-as-a-target),
+version drift, out-of-band coverage, CI supply-chain-gate coverage, the recommended
+[companion firewalls](#beyond-the-tiers) (Socket Firewall / `vet`), and a blast-radius
+exposure audit — each non-green light carries the one-liner to fix it.
 
 ## Run it outside Claude
 
@@ -121,6 +121,29 @@ __sc_run() {
 for pm in npm pnpm yarn bun npx; do eval "${pm}() { __sc_run ${pm} \"\$@\"; }"; done; unset pm
 ```
 
+### Opt-in quarantine — contain, don't just report
+
+Every Tier-0 finding means the payload **already ran**; by default the response is a
+report plus a refusal of the next gated command, and the artifact keeps working until a
+human acts. `WORMHOOK_QUARANTINE=1` closes that gap for the **exact-match** artifacts
+only — the known persistence paths (droppers, LaunchAgents, `~/.dev-env`), a `.pth`
+matching the known-bad name or SHA-256, the known-bad `.abi3.so` basenames:
+
+```bash
+wormhook-scan --quarantine                    # one fleet scan with containment
+wormhook-scan install-launchd --quarantine    # the hourly sweep contains at 03:00
+# in Claude Code: settings.json -> "env": { "WORMHOOK_QUARANTINE": "1" }
+```
+
+A quarantined artifact is renamed to `<path>.wormhook-quarantined.<epoch>` + `chmod 000`
+— reversible, forensics-preserving, and it can no longer fire on the next login or
+interpreter start. Nothing is killed, unloaded, or deleted (an already-running stealer
+is the network layer's / your job — see the alert's remediation steps), behavioral
+matches stay report-only (an unattended rename demands exact-match confidence), a
+root-owned artifact degrades to the normal advisory, and every action is logged to
+`~/.cache/notambourine/malware-scan/quarantine.log`. Default is off everywhere:
+containment inverts the fail-open bias, so it stays a conscious opt-in.
+
 ### Gate pull requests on GitHub (Action)
 
 wormhook ships an `action.yml`, so the **same engine** runs as a CI check. Drop it into any
@@ -192,8 +215,12 @@ firewall layer it deliberately doesn't reimplement:
 - **Python execution gating.** `pip`/`pip3`/`pipx`/`uv`/`python`/`python3` trigger the
   Tier-0 sweep at `PreToolUse`, so the weaponized `.pth` startup-hook check runs **before**
   the interpreter auto-executes a poisoned site-packages `.pth` (the Hades/Miasma PyPI
-  vector) — not just on the next npm/git command. (It gates *execution* to run the existing
-  persistence scan early; it is **not** a full PyPI install auditor.)
+  vector) — not just on the next npm/git command. The sweep covers project venvs, the
+  active `$VIRTUAL_ENV`/`$CONDA_PREFIX`, and the user + global site-packages a no-venv
+  `pip install` lands in (`~/.local`, macOS `~/Library/Python`, Homebrew, `/usr/local`,
+  python.org framework, every pyenv version, uv-managed interpreters). (It gates
+  *execution* to run the existing persistence scan early; it is **not** a full PyPI
+  install auditor.)
 - **`UserPromptSubmit` continuous monitor.** The cheap tiers (T0 + T1) re-run at **every
   human turn** and — unlike `SessionStart` — can **block**. This is the hook layer's closest
   approximation of a continuous filesystem watcher: persistence planted mid-session (a `pip
@@ -388,11 +415,15 @@ write `~/.claude/setup.mjs`.
   scanning (an IOC corpus looks like malware), so an external scanner watching the
   directory does not flag the edit either.
 
-No self-integrity check exists today. A startup hash manifest over the engine and
-signature files would turn silent tampering into a loud 🟡 — it cannot stop an attacker
-who also rewrites the manifest, but it raises the bar from a one-line append to a
-coordinated edit. Until then, the plugin dir is a git checkout: `git -C <plugin-dir>
-status` shows any local modification, and a marketplace update restores a clean copy.
+The `SessionStart` `integrity` light closes the silent half of that gap: it verifies
+`scripts/wormhook.sh` and `scripts/malware-patterns.sh` against a shipped SHA-256
+manifest (`scripts/integrity.sha256`) on every launch and goes 🔴 on any mismatch — like
+the jq "scans are OFF" alarm, it is deliberately **not silenceable**. It cannot stop an
+attacker who also rewrites the manifest, but it raises the bar from a one-line append to
+a coordinated edit, and a neutered engine no longer keeps reporting green. (CI
+regenerates-or-fails on the manifest, so a legitimate engine change can never ship a
+stale one.) The plugin dir is also a git checkout: `git -C <plugin-dir> status` shows
+any local modification, and a marketplace update restores a clean copy.
 
 ## Signatures
 

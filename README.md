@@ -366,6 +366,30 @@ you to install the install-firewall ones (Socket Firewall, `vet`).
 The design bet is **independence over coverage**: a fast, no-network, near-zero-FP gate
 at the agent boundary that trips on a specific, evidence-backed set of indicators.
 
+## Threat model: the scanner as a target
+
+wormhook's own threat model includes the worm editing wormhook. The engine and its
+signatures live in the installed plugin dir under `$HOME`, writable by any process
+with `$HOME` write access — the same access the AGENT-HIJACK campaigns already use to
+write `~/.claude/setup.mjs`.
+
+- **Covered:** a worm that *writes* a payload next to the scanner (a dropper, an agent
+  hook, a `.pth`). Tier 0 re-runs on every event, uncached, exactly because `~/.claude`
+  is attacker-writable.
+- **Residual gap:** a worm that *edits the plugin itself*. One appended `exit 0` in
+  `scripts/wormhook.sh`, or one emptied signature array, silences every surface at once
+  (the hook events, the launchd sweep, the git hook, the exec-guard, the Action) — and a
+  neutered engine still prints its green status line, so the dashboard reads healthy.
+  `.tripwire-allow` deliberately exempts the engine and the signature corpus from content
+  scanning (an IOC corpus looks like malware), so an external scanner watching the
+  directory does not flag the edit either.
+
+No self-integrity check exists today. A startup hash manifest over the engine and
+signature files would turn silent tampering into a loud 🟡 — it cannot stop an attacker
+who also rewrites the manifest, but it raises the bar from a one-line append to a
+coordinated edit. Until then, the plugin dir is a git checkout: `git -C <plugin-dir>
+status` shows any local modification, and a marketplace update restores a clean copy.
+
 ## Signatures
 
 All signatures live in one file — [`scripts/malware-patterns.sh`](./scripts/malware-patterns.sh) —

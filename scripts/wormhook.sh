@@ -511,9 +511,17 @@ done
 # hook — installed directly, or globally via init.templateDir, or per-repo via
 # core.hooksPath — re-runs the dropper on every commit/push and silently adds the
 # carrier dependency. This is a top "inject into a repo we pseudo-trust" vector.
-git_hook_dirs=("${CWD}/.git/hooks")
+# Ask git for the hooks dir rather than assuming .git/ is a directory: in a
+# WORKTREE .git is a file, so the literal path resolves to nothing and the scan
+# covered nothing (issue #60). rev-parse --git-path handles plain checkout,
+# worktree, and core.hooksPath alike; its output can be relative to $CWD.
+# Literal fallback keeps coverage when git is missing or $CWD is not a repo.
+repo_hooks=$(git -C "$CWD" rev-parse --git-path hooks 2>/dev/null) || repo_hooks=""
+[[ -n "$repo_hooks" ]] || repo_hooks="${CWD}/.git/hooks"
+[[ "$repo_hooks" == /* ]] || repo_hooks="${CWD}/${repo_hooks}"
+git_hook_dirs=("$repo_hooks")
 tmpl_dir=$(git config --global --get init.templateDir 2>/dev/null) && [[ -n "$tmpl_dir" ]] && git_hook_dirs+=("${tmpl_dir/#\~/$HOME}/hooks")
-hooks_path=$(git -C "$CWD" config --get core.hooksPath 2>/dev/null) && [[ -n "$hooks_path" ]] && git_hook_dirs+=("$hooks_path")
+hooks_path=$(git -C "$CWD" config --get core.hooksPath 2>/dev/null) && [[ -n "$hooks_path" && "$hooks_path" != "$repo_hooks" ]] && git_hook_dirs+=("$hooks_path")
 for hd in "${git_hook_dirs[@]}"; do
   for h in pre-commit pre-push post-checkout post-merge; do
     [[ -f "$hd/$h" ]] || continue
@@ -553,10 +561,23 @@ _persist_scan 5
 # regardless of how it arrived (pip/uv are not gated). Bounded find over the
 # project's venv layouts + any stray committed .pth; legit .pth files only touch
 # sys.path, so MALWARE_PTH_RE (process spawn / socket / URL fetch / bun) is near-0 FP.
+# Seed list for BOTH Python sweeps (.pth here, .abi3.so below). The four
+# conventional names cover committed layouts; $VIRTUAL_ENV covers an ACTIVE venv
+# whatever it is named (venv312, .direnv, a Poetry cache); ~/.local/lib covers
+# `pip install --user` — the no-venv audience the Hades/Miasma MCP typosquats
+# target (issue #58). Global/pyenv/Homebrew prefixes stay out: enumerating them
+# needs `python3 -c 'import site…'`, and starting the interpreter auto-executes
+# the very .pth this sweep exists to gate. -maxdepth 5: site-packages sits at
+# depth 4 (<venv>/lib/python3.12/site-packages), so 4 left zero margin.
+py_roots=("${CWD}/.venv" "${CWD}/venv" "${CWD}/env" "${CWD}/.tox")
+case "${VIRTUAL_ENV:-}" in
+  ""|"${CWD}/.venv"|"${CWD}/venv"|"${CWD}/env"|"${CWD}/.tox") : ;;  # empty or already seeded
+  *) [[ -d "$VIRTUAL_ENV" ]] && py_roots+=("$VIRTUAL_ENV") ;;
+esac
+for _u in "$HOME"/.local/lib/python*/site-packages; do [[ -d "$_u" ]] && py_roots+=("$_u"); done
 pth_files=()
 while IFS= read -r _p; do [[ -n "$_p" ]] && pth_files+=("$_p"); done < <(
-  timeout 5 find "${CWD}/.venv" "${CWD}/venv" "${CWD}/env" "${CWD}/.tox" \
-    -maxdepth 4 -name '*.pth' -type f 2>/dev/null
+  timeout 5 find "${py_roots[@]}" -maxdepth 5 -name '*.pth' -type f 2>/dev/null
 )
 for _p in "${CWD}"/*.pth; do [[ -f "$_p" ]] && pth_files+=("$_p"); done
 if [[ ${#pth_files[@]} -gt 0 ]]; then
@@ -601,8 +622,7 @@ fi
 # known-bad campaign artifacts flag (zero FP).
 so_files=()
 while IFS= read -r _s; do [[ -n "$_s" ]] && so_files+=("$_s"); done < <(
-  timeout 5 find "${CWD}/.venv" "${CWD}/venv" "${CWD}/env" "${CWD}/.tox" \
-    -maxdepth 4 -name '*.abi3.so' -type f 2>/dev/null
+  timeout 5 find "${py_roots[@]}" -maxdepth 5 -name '*.abi3.so' -type f 2>/dev/null
 )
 for _s in "${CWD}"/*.abi3.so; do [[ -f "$_s" ]] && so_files+=("$_s"); done
 # Count-guard the iteration: under bash 3.2 + `set -u`, expanding "${so_files[@]}"

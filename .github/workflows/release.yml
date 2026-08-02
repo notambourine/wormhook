@@ -23,6 +23,7 @@ concurrency:
 jobs:
   tag:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write   # create the tag + release; scoped to this job only
     steps:

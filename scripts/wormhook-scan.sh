@@ -157,6 +157,9 @@ cmd_scan() {
       --fast) mode=fast ;;
       --persistence) persistence=1 ;;
       --literal) literal=1 ;;
+      # Adapters never duplicate detection: the flag is just the engine env toggle
+      # (exact-match Tier-0 quarantine, issue #59) exported before the engine runs.
+      --quarantine) export WORMHOOK_QUARANTINE=1 ;;
       -q|--quiet-if-clean) quiet=1 ;;
       --notify) notify=1 ;;
       --json) json=1 ;;
@@ -334,12 +337,13 @@ cmd_install_cli() {
 # ══ install-launchd ══════════════════════════════════════════════════════════════
 _xml() { local s="$1"; s="${s//&/&amp;}"; s="${s//</&lt;}"; s="${s//>/&gt;}"; printf '%s' "$s"; }
 cmd_install_launchd() {
-  local every=3600 paths=() bin noload=0
+  local every=3600 paths=() bin noload=0 quarantine=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --every) shift; every="${1:-3600}" ;;
       --every=*) every="${1#--every=}" ;;
       --no-load) noload=1 ;;
+      --quarantine) quarantine=1 ;;
       *) [[ -d "$1" ]] && paths+=("$1") || echo "skipping non-dir: $1" >&2 ;;
     esac
     shift
@@ -376,6 +380,9 @@ TXT
     printf '  </array>\n'
     printf '  <key>RunAtLoad</key><true/>\n'
     printf '  <key>StartInterval</key><integer>%s</integer>\n' "$every"
+    # Quarantine rides the ENGINE env toggle, not a CLI flag in ProgramArguments, so
+    # the sweep contains exact-match Tier-0 artifacts at 03:00 instead of only banner-ing.
+    [[ "$quarantine" == 1 ]] && printf '  <key>EnvironmentVariables</key><dict><key>WORMHOOK_QUARANTINE</key><string>1</string></dict>\n'
     printf '  <key>StandardOutPath</key><string>%s</string>\n' "$(_xml "$SWEEP_LOG")"
     printf '  <key>StandardErrorPath</key><string>%s</string>\n' "$(_xml "$SWEEP_LOG")"
     printf '</dict></plist>\n'
@@ -517,12 +524,12 @@ cmd_help() {
 wormhook-scan — run the wormhook supply-chain scanner outside Claude Code.
 
 USAGE
-  wormhook-scan [PATHS...] [--deep|--fast] [--persistence] [--literal] [-q] [--notify] [--log F] [--json]
-  wormhook-scan check [DIR] [-q]          # one-repo verdict (exec-guard primitive)
+  wormhook-scan [PATHS...] [--deep|--fast] [--persistence] [--literal] [--quarantine] [-q] [--notify] [--log F] [--json]
+  wormhook-scan check [DIR] [-q] [--quarantine]   # one-repo verdict (exec-guard primitive)
   wormhook-scan shell-init                # print opt-in npm/pnpm/yarn/bun/npx exec-guard
   wormhook-scan git-hook                  # used by installed git hooks (🟢 line clean, loud banner on finding)
   wormhook-scan install-cli
-  wormhook-scan install-launchd [--every SECONDS] [--no-load] [PATHS...]
+  wormhook-scan install-launchd [--every SECONDS] [--no-load] [--quarantine] [PATHS...]
   wormhook-scan install-git-hook
   wormhook-scan uninstall-launchd | uninstall-git-hook
   wormhook-scan status
@@ -539,6 +546,9 @@ SCAN
   --deep            force the Tier-2 node_modules walk.
   --persistence     only the machine-wide (\$HOME) persistence checks.
   --literal         scan exactly the given dirs (skip git-repo discovery).
+  --quarantine      opt-in containment (WORMHOOK_QUARANTINE=1): rename + chmod 000
+                    EXACT-MATCH Tier-0 persistence artifacts (reversible; behavioral
+                    matches stay report-only). Default: report-only.
   -q                silent when clean (for hooks / launchd).
   Exit: 0 clean · 1 critical (or machine persistence) · 2 degraded.
 TXT
@@ -592,6 +602,7 @@ cmd_check() {
     case "$a" in
       -q|--quiet-if-clean) quiet=1 ;;
       --deep) mode=deep ;;
+      --quarantine) export WORMHOOK_QUARANTINE=1 ;;
       -*) ;;
       *) [[ -d "$a" ]] && dir="$a" ;;
     esac

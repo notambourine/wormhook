@@ -331,6 +331,22 @@ OUT="$(_run_engine "$(_payload PreToolUse 'python3 app.py')")"
 assert_jq "T0 .pth: user site-packages (pip --user) denies (PreToolUse)" "$OUT" \
   '.hookSpecificOutput.permissionDecision=="deny" and (.hookSpecificOutput.permissionDecisionReason|contains("MALICIOUS PYTHON .pth"))'
 
+# --- #58 remainder: a pyenv version's site-packages (no venv anywhere) is swept.
+_mktemp_case
+mkdir -p "$CASE_HOME/.pyenv/versions/3.12.0/lib/python3.12/site-packages"
+printf '%s\n' "$MAL_PTH" > "$CASE_HOME/.pyenv/versions/3.12.0/lib/python3.12/site-packages/evil.pth"
+OUT="$(_run_engine "$(_payload PreToolUse 'python3 app.py')")"
+assert_jq "#58 .pth: pyenv version site-packages denies (PreToolUse)" "$OUT" \
+  '.hookSpecificOutput.permissionDecision=="deny" and (.hookSpecificOutput.permissionDecisionReason|contains("MALICIOUS PYTHON .pth"))'
+
+# --- #58 remainder: macOS framework user site (~/Library/Python) is swept.
+_mktemp_case
+mkdir -p "$CASE_HOME/Library/Python/3.9/lib/python/site-packages"
+printf '%s\n' "$MAL_PTH" > "$CASE_HOME/Library/Python/3.9/lib/python/site-packages/evil.pth"
+OUT="$(_run_engine "$(_payload PreToolUse 'pip install requests')")"
+assert_jq "#58 .pth: ~/Library/Python user site denies (PreToolUse)" "$OUT" \
+  '.hookSpecificOutput.permissionDecision=="deny" and (.hookSpecificOutput.permissionDecisionReason|contains("MALICIOUS PYTHON .pth"))'
+
 # ══════════════════════════════════════════════════════════════════════════════════
 # 7. GATE DECOMPOSITION + TARGET DIR (issues #56/#57): compound and env-prefixed
 #    commands must gate (the harness `if` already matched them; the old ^-anchored
@@ -403,6 +419,98 @@ printf '{"scripts":{"preinstall":"node scripts/gen.js"}}' > "$CASE_CWD/packages/
 OUT="$(_run_engine "$(_payload PreToolUse 'cd packages/app && CI=1 npm install')")"
 assert_jq "FP guard: clean compound install in a workspace stays green" "$OUT" \
   '.verdict=="green"'
+
+# ══════════════════════════════════════════════════════════════════════════════════
+# 8. OPT-IN QUARANTINE (issue #59) — WORMHOOK_QUARANTINE=1 renames + chmod 000 an
+#    EXACT-MATCH Tier-0 artifact (reversible containment). Behavioral matches stay
+#    report-only, and with the flag unset the engine never mutates anything.
+# ══════════════════════════════════════════════════════════════════════════════════
+
+# Exact-IOC names come from the signature source of truth (never literal here, so the
+# harness cannot trip a future content signature scanning its own tree).
+# shellcheck source=../scripts/malware-patterns.sh disable=SC1091
+. "$REPO_ROOT/scripts/malware-patterns.sh"
+
+# --- Default off: a Tier-0 hit is reported but the artifact is untouched.
+_mktemp_case
+mkdir -p "$CASE_HOME/.claude"
+printf '// dropper\n' > "$CASE_HOME/.claude/$MAL_DROPPER"
+OUT="$(_run_engine "$(_payload UserPromptSubmit)")"
+assert_jq "quarantine default-off: hit still blocks" "$OUT" '.decision=="block"'
+if [[ -f "$CASE_HOME/.claude/$MAL_DROPPER" ]]; then
+  _ok "quarantine default-off: artifact left in place"
+else
+  _bad "quarantine default-off: artifact left in place" "file moved without the flag"
+fi
+
+# --- Flag on: the exact-match dropper is renamed, the block still fires, and the
+#     alert body names the action.
+_mktemp_case
+mkdir -p "$CASE_HOME/.claude"
+printf '// dropper\n' > "$CASE_HOME/.claude/$MAL_DROPPER"
+OUT="$(printf '%s' "$(_payload UserPromptSubmit)" \
+  | HOME="$CASE_HOME" XDG_CACHE_HOME="$CASE_CACHE" WORMHOOK_QUARANTINE=1 bash "$ENGINE" 2>/dev/null)"
+assert_jq "quarantine: UPS still blocks and reports QUARANTINED" "$OUT" \
+  '.decision=="block" and (.systemMessage|contains("QUARANTINED"))'
+if [[ ! -e "$CASE_HOME/.claude/$MAL_DROPPER" ]] \
+   && ls "$CASE_HOME/.claude/$MAL_DROPPER".wormhook-quarantined.* >/dev/null 2>&1; then
+  _ok "quarantine: exact-match artifact renamed to *.wormhook-quarantined.*"
+else
+  _bad "quarantine: exact-match artifact renamed" "original still present or no quarantined copy"
+fi
+if [[ -s "$CASE_CACHE/notambourine/malware-scan/quarantine.log" ]]; then
+  _ok "quarantine: action recorded in quarantine.log"
+else
+  _bad "quarantine: action recorded in quarantine.log" "log missing or empty"
+fi
+
+# --- Behavioral .pth match stays report-only even with the flag on (the FP-tolerance
+#     invariant: an unattended rename demands exact-match confidence).
+_mktemp_case
+mkdir -p "$CASE_CWD/.venv/lib/python3.12/site-packages"
+printf '%s\n' "$MAL_PTH" > "$CASE_CWD/.venv/lib/python3.12/site-packages/evil.pth"
+OUT="$(printf '%s' "$(_payload PreToolUse 'python3 app.py')" \
+  | HOME="$CASE_HOME" XDG_CACHE_HOME="$CASE_CACHE" WORMHOOK_QUARANTINE=1 bash "$ENGINE" 2>/dev/null)"
+assert_jq "quarantine: behavioral .pth still denies" "$OUT" \
+  '.hookSpecificOutput.permissionDecision=="deny"'
+if [[ -f "$CASE_CWD/.venv/lib/python3.12/site-packages/evil.pth" ]]; then
+  _ok "quarantine: behavioral .pth left in place (report-only)"
+else
+  _bad "quarantine: behavioral .pth left in place" "behavioral match was moved"
+fi
+
+# --- A known-bad .pth NAME (exact IOC, benign content) IS quarantined with the flag on.
+_mktemp_case
+mkdir -p "$CASE_CWD/.venv/lib/python3.12/site-packages"
+printf '# sys.path shim\n' > "$CASE_CWD/.venv/lib/python3.12/site-packages/$MALWARE_PTH_IOC_NAME"
+OUT="$(printf '%s' "$(_payload PreToolUse 'python3 app.py')" \
+  | HOME="$CASE_HOME" XDG_CACHE_HOME="$CASE_CACHE" WORMHOOK_QUARANTINE=1 bash "$ENGINE" 2>/dev/null)"
+assert_jq "quarantine: known-bad .pth name denies + reports QUARANTINED" "$OUT" \
+  '.hookSpecificOutput.permissionDecision=="deny" and (.systemMessage|contains("QUARANTINED"))'
+if [[ ! -e "$CASE_CWD/.venv/lib/python3.12/site-packages/$MALWARE_PTH_IOC_NAME" ]]; then
+  _ok "quarantine: known-bad .pth name renamed"
+else
+  _bad "quarantine: known-bad .pth name renamed" "exact-name IOC left in place"
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════════
+# 9. SELF-INTEGRITY DOCTOR LIGHT (issue #61) — a pristine copy of scripts/ goes 🟢;
+#    one appended line to the engine flips the SAME check 🔴. Runs on a COPY so the
+#    real tree is never touched.
+# ══════════════════════════════════════════════════════════════════════════════════
+_mktemp_case
+cp -R "$REPO_ROOT/scripts" "$CASE_DIR/scripts"
+OUT="$(bash "$CASE_DIR/scripts/doctor/integrity.sh" 2>/dev/null)"
+assert_jq "integrity: pristine copy reports 🟢" "$OUT" \
+  '.systemMessage|contains("🟢") and contains("integrity")'
+printf '\n# appended by test\n' >> "$CASE_DIR/scripts/wormhook.sh"
+OUT="$(bash "$CASE_DIR/scripts/doctor/integrity.sh" 2>/dev/null)"
+assert_jq "integrity: one appended line flips 🔴 and names wormhook.sh" "$OUT" \
+  '(.systemMessage|contains("🔴") and contains("wormhook.sh")) and (.hookSpecificOutput.additionalContext|contains("SELF-INTEGRITY FAILURE"))'
+mv "$CASE_DIR/scripts/integrity.sha256" "$CASE_DIR/scripts/integrity.sha256.gone"
+OUT="$(bash "$CASE_DIR/scripts/doctor/integrity.sh" 2>/dev/null)"
+assert_jq "integrity: missing manifest degrades 🟡 (fail open, loud)" "$OUT" \
+  '.systemMessage|contains("🟡") and contains("manifest missing")'
 
 echo
 printf 'tests: %d passed, %d failed\n' "$PASS" "$FAIL"

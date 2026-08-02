@@ -174,8 +174,11 @@ can find something new:
   install before it can run a dropper.
 - **Tier 2 — `node_modules` content/IOC scan** (expensive): runs only when deps changed
   (keyed off lockfile hash + `node_modules` dir mtimes ≤2 deep, cached under
-  `~/.cache/notambourine/`). **Fails open** — a scan that hits its `timeout` reports 🟡
-  and doesn't refresh the cache, so it never blocks your launch.
+  `~/.cache/notambourine/`) or when the last clean scan is older than 24 hours
+  (`WORMHOOK_T2_TTL_HOURS`) — the key cannot see an in-place overwrite of an existing
+  dep file, so the cache ages out to bound that window. **Fails open** — a scan that
+  hits its `timeout` reports 🟡 and doesn't refresh the cache, so it never blocks your
+  launch.
 
 ### Beyond the tiers
 
@@ -256,7 +259,7 @@ flowchart TD
     T1c -- hit --> G
     T1c -- clean --> CACHE
 
-    CACHE{deps changed?<br/>lockfile hash + dir mtimes ≤2 deep}:::cache
+    CACHE{deps changed?<br/>lockfile hash + dir mtimes ≤2 deep, 24h TTL}:::cache
     CACHE -- "no — cache hit" --> DONE
     CACHE -- "yes / stale" --> T2
 
@@ -362,6 +365,30 @@ you to install the install-firewall ones (Socket Firewall, `vet`).
 
 The design bet is **independence over coverage**: a fast, no-network, near-zero-FP gate
 at the agent boundary that trips on a specific, evidence-backed set of indicators.
+
+## Threat model: the scanner as a target
+
+wormhook's own threat model includes the worm editing wormhook. The engine and its
+signatures live in the installed plugin dir under `$HOME`, writable by any process
+with `$HOME` write access — the same access the AGENT-HIJACK campaigns already use to
+write `~/.claude/setup.mjs`.
+
+- **Covered:** a worm that *writes* a payload next to the scanner (a dropper, an agent
+  hook, a `.pth`). Tier 0 re-runs on every event, uncached, exactly because `~/.claude`
+  is attacker-writable.
+- **Residual gap:** a worm that *edits the plugin itself*. One appended `exit 0` in
+  `scripts/wormhook.sh`, or one emptied signature array, silences every surface at once
+  (the hook events, the launchd sweep, the git hook, the exec-guard, the Action) — and a
+  neutered engine still prints its green status line, so the dashboard reads healthy.
+  `.tripwire-allow` deliberately exempts the engine and the signature corpus from content
+  scanning (an IOC corpus looks like malware), so an external scanner watching the
+  directory does not flag the edit either.
+
+No self-integrity check exists today. A startup hash manifest over the engine and
+signature files would turn silent tampering into a loud 🟡 — it cannot stop an attacker
+who also rewrites the manifest, but it raises the bar from a one-line append to a
+coordinated edit. Until then, the plugin dir is a git checkout: `git -C <plugin-dir>
+status` shows any local modification, and a marketplace update restores a clean copy.
 
 ## Signatures
 

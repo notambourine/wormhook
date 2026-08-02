@@ -331,6 +331,79 @@ OUT="$(_run_engine "$(_payload PreToolUse 'python3 app.py')")"
 assert_jq "T0 .pth: user site-packages (pip --user) denies (PreToolUse)" "$OUT" \
   '.hookSpecificOutput.permissionDecision=="deny" and (.hookSpecificOutput.permissionDecisionReason|contains("MALICIOUS PYTHON .pth"))'
 
+# ══════════════════════════════════════════════════════════════════════════════════
+# 7. GATE DECOMPOSITION + TARGET DIR (issues #56/#57): compound and env-prefixed
+#    commands must gate (the harness `if` already matched them; the old ^-anchored
+#    regex silently dropped them), and Tier 1 must read the manifest the command
+#    operates on — cd target, --prefix/--cwd dir, workspace packages — not only $CWD.
+# ══════════════════════════════════════════════════════════════════════════════════
+
+# Poisoned install-lifecycle manifest, assembled from fragments (see header).
+_poison_manifest() { jq -n --arg s "node $MAL_DROPPER" '{scripts:{preinstall:$s}}' > "$1"; }
+
+# --- #56+#57: `cd sub && npm install` (the normal Bash-tool shape in a monorepo)
+#     gates, and the deny comes from the SUB manifest, not the clean root one.
+_mktemp_case
+mkdir -p "$CASE_CWD/sub"
+printf '{"scripts":{}}' > "$CASE_CWD/package.json"
+_poison_manifest "$CASE_CWD/sub/package.json"
+OUT="$(_run_engine "$(_payload PreToolUse 'cd sub && npm install')")"
+assert_jq "#56/#57: cd sub && npm install denies on the sub manifest" "$OUT" \
+  '.hookSpecificOutput.permissionDecision=="deny" and (.hookSpecificOutput.permissionDecisionReason|contains("MALICIOUS LIFECYCLE"))'
+
+# --- #56: a leading VAR=value assignment no longer defeats the gate.
+_mktemp_case
+_poison_manifest "$CASE_CWD/package.json"
+OUT="$(_run_engine "$(_payload PreToolUse 'CI=1 npm install')")"
+assert_jq "#56: CI=1 npm install gates and denies" "$OUT" \
+  '.hookSpecificOutput.permissionDecision=="deny" and (.hookSpecificOutput.permissionDecisionReason|contains("MALICIOUS LIFECYCLE"))'
+
+# --- #56: a gated verb AFTER a separator fires the PostToolUse re-scan.
+_mktemp_case
+printf '%s\n' "$MAL_INJECT" > "$CASE_CWD/index.js"
+OUT="$(_run_engine "$(_payload PostToolUse 'git pull && npm test')")"
+assert_jq "#56: git pull && npm test triggers the post-pull scan -> red" "$OUT" \
+  '.verdict=="red" and (.findings|map(.title)|any(contains("MALICIOUS CODE IN PROJECT SOURCE FILE")))'
+
+# --- #57: npm --prefix <dir> install reads <dir>'s manifest.
+_mktemp_case
+mkdir -p "$CASE_CWD/packages/api"
+printf '{"scripts":{}}' > "$CASE_CWD/package.json"
+_poison_manifest "$CASE_CWD/packages/api/package.json"
+OUT="$(_run_engine "$(_payload PreToolUse 'npm --prefix packages/api install')")"
+assert_jq "#57: npm --prefix packages/api install denies on that manifest" "$OUT" \
+  '.hookSpecificOutput.permissionDecision=="deny" and (.hookSpecificOutput.permissionDecisionReason|contains("MALICIOUS LIFECYCLE"))'
+
+# --- #57: a root install runs the lifecycle of every workspace, so a poisoned
+#     workspace preinstall must deny a plain `npm install` at the root.
+_mktemp_case
+mkdir -p "$CASE_CWD/packages/evil"
+jq -n '{workspaces:["packages/*"],scripts:{}}' > "$CASE_CWD/package.json"
+_poison_manifest "$CASE_CWD/packages/evil/package.json"
+OUT="$(_run_engine "$(_payload PreToolUse 'npm install')")"
+assert_jq "#57 workspaces: poisoned workspace preinstall denies a root install" "$OUT" \
+  '.hookSpecificOutput.permissionDecision=="deny" and (.hookSpecificOutput.permissionDecisionReason|contains("MALICIOUS LIFECYCLE"))'
+
+# --- #57: pnpm-workspace.yaml globs are walked too.
+_mktemp_case
+mkdir -p "$CASE_CWD/apps/evil"
+printf '{"scripts":{}}' > "$CASE_CWD/package.json"
+printf 'packages:\n  - "apps/*"\n' > "$CASE_CWD/pnpm-workspace.yaml"
+_poison_manifest "$CASE_CWD/apps/evil/package.json"
+OUT="$(_run_engine "$(_payload PreToolUse 'pnpm install')")"
+assert_jq "#57 pnpm-workspace.yaml: poisoned workspace preinstall denies" "$OUT" \
+  '.hookSpecificOutput.permissionDecision=="deny" and (.hookSpecificOutput.permissionDecisionReason|contains("MALICIOUS LIFECYCLE"))'
+
+# --- FP guard: a clean monorepo with a benign workspace preinstall stays green
+#     through the widened gate (compound + env-prefixed form).
+_mktemp_case
+mkdir -p "$CASE_CWD/packages/app"
+jq -n '{workspaces:["packages/*"],scripts:{}}' > "$CASE_CWD/package.json"
+printf '{"scripts":{"preinstall":"node scripts/gen.js"}}' > "$CASE_CWD/packages/app/package.json"
+OUT="$(_run_engine "$(_payload PreToolUse 'cd packages/app && CI=1 npm install')")"
+assert_jq "FP guard: clean compound install in a workspace stays green" "$OUT" \
+  '.verdict=="green"'
+
 echo
 printf 'tests: %d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

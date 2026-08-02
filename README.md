@@ -171,7 +171,11 @@ can find something new:
 - **Tier 1 — project source, `package.json` lifecycle & CI config** (cheap, every gated
   event): install-lifecycle scripts, injected loaders in the source tree, and
   `.github/workflows` + `.releaserc` poisoning. This is the tier that **blocks** an
-  install before it can run a dropper.
+  install before it can run a dropper. It reads the manifest of the directory the
+  command actually targets (`cd sub && npm install`, `npm --prefix`, `yarn --cwd`) and
+  every workspace package's manifest (`workspaces` globs + `pnpm-workspace.yaml`) — a
+  root install runs each workspace's lifecycle, so the root manifest alone is not the
+  attack surface. Compound and env-prefixed commands (`CI=1 npm install`) gate too.
 - **Tier 2 — `node_modules` content/IOC scan** (expensive): runs only when deps changed
   (keyed off lockfile hash + `node_modules` dir mtimes ≤2 deep, cached under
   `~/.cache/notambourine/`) or when the last clean scan is older than 24 hours

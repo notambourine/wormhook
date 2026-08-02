@@ -84,8 +84,19 @@ that aren't obvious from the code.
 
 `wormhook.sh` decides *which tiers run* and *whether it can block* from two inputs:
 `EVENT` (`hook_event_name`) and the command, matched against `GATE_RE` / `INSTALL_RE` /
-`GIT_RE` / `PYGATE_RE` / `PYINSTALL_RE`. The scan engine itself is **CWD-driven** — it scans
-`$CWD` and `~/.claude` regardless of the command. **Two events can hard-block:** `PreToolUse`
+`GIT_RE` / `PYGATE_RE` / `PYINSTALL_RE`. **The regexes match per SUBCOMMAND, not against the
+raw string** (issue #56): the command is split at `;`/`&&`/`||`/`|`, and leading `VAR=value`
+assignments plus a bare `env` prefix are stripped from each segment — mirroring the harness's
+own `if` matching, so `cd sub && npm install` and `CI=1 npm install` gate. `^\s*` in a class
+regex anchors a *segment* start. Dir-option pairs (`--prefix`/`--cwd`/`--dir`/`-C` + value)
+are deleted from the matching copy so `npm --prefix X install` still matches `INSTALL_RE`.
+The engine scans `~/.claude`, `$CWD`, **and every target dir the command operates on**
+(issue #57): a `cd` is tracked through the segments and `--prefix`/`--cwd`/`--dir`/`-C` are
+honoured, so Tier 0's agent-config sweep and every Tier-1 check run per target dir — the
+lifecycle gate additionally walks each target's **workspace manifests** (`package.json`
+`workspaces` + `pnpm-workspace.yaml`), since a root install runs every workspace's lifecycle.
+Tier 2 and its scan cache stay `$CWD`-rooted (the launchd sweep / per-repo sessions cover
+other trees). **Two events can hard-block:** `PreToolUse`
 (`hookSpecificOutput.permissionDecision:"deny"`) and `UserPromptSubmit` (**top-level**
 `decision:"block"`). `SessionStart`/`PostToolUse` run after the point of no return and only warn.
 

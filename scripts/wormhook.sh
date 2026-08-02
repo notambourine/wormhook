@@ -100,7 +100,12 @@ NODE_MODULES="${CWD}/node_modules"
 # Command classes. GATE = the npm/node commands we care about at all; INSTALL = the
 # subset that mutates node_modules (the only thing that can introduce a new dep IOC).
 # Keep these in sync with the `if` globs in hooks/hooks.json (`if` ⊇ regex) — see the
-# "Two sources of truth" note in CLAUDE.md.
+# "Two sources of truth" note in CLAUDE.md. The regexes are matched per SUBCOMMAND
+# (see the decomposition below), not against the raw command string: Claude Code's
+# `if` filter checks each subcommand of a compound command and strips leading
+# VAR=value assignments, so `cd sub && npm install` and `CI=1 npm install` reach
+# this script — the old whole-string `^` match dropped both on the floor with no
+# signal (issue #56). `^\s*` now anchors the start of a stripped segment.
 GATE_RE='^\s*(npm (ci|install|i|add|run|test|exec)|pnpm (install|i|add|run|exec|dlx)|yarn( (install|add|run))?|bun (install|add|i|run|x)|npx|node)(\s|$)'
 INSTALL_RE='^\s*(npm (ci|install|i|add)|pnpm (install|i|add)|yarn( (install|add))?|bun (install|add|i))(\s|$)'
 # GIT = working-tree-rewriting git ops. pull/merge/checkout/switch/rebase land new
@@ -116,6 +121,63 @@ GIT_RE='^\s*git\s+(-C\s+\S+\s+)?(pull|merge|checkout|switch|rebase)(\s|$)'
 # gated: too broad, no matching signatures, pure FP/latency tax. Keep `if` ⊇ regex.
 PYGATE_RE='^\s*(pip|pip3|pipx|uv|python|python3)(\s|$)'
 PYINSTALL_RE='^\s*((pip|pip3|pipx)\s+install|uv\s+(add|sync|(pip\s+install)))(\s|$)'
+
+# ── Subcommand decomposition (issue #56) ──────────────────────────────────────
+# One segment per line: split at [;&|]+ (covers &&, ||, ;, |, & and |&), then strip
+# leading VAR=value assignments and a bare `env` prefix from each segment. Over-
+# splitting inside a quoted string is accepted: a spurious segment can only ADD a
+# scan (fails toward scanning) — a block still requires an actual finding.
+WH_SUBCMDS=""
+[[ -n "$COMMAND" ]] && WH_SUBCMDS=$(printf '%s\n' "$COMMAND" \
+  | awk '{ gsub(/[;&|]+/, "\n"); print }' \
+  | sed -E 's/^[[:space:]]*((env|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*)[[:space:]]+)*//')
+# Class-matching copy with the dir-option pairs deleted, so `npm --prefix X install`
+# / `yarn --cwd X install` / `pnpm -C X add` match the verb-adjacent class regexes
+# unchanged. The RAW segments keep the option — target derivation reads it below.
+WH_DIROPT_STRIP='s/[[:space:]](--prefix|--cwd|--dir|-C)[= ][^[:space:]]+//g'
+WH_SUBCMDS_N=""
+[[ -n "$WH_SUBCMDS" ]] && WH_SUBCMDS_N=$(printf '%s\n' "$WH_SUBCMDS" | sed -E "$WH_DIROPT_STRIP")
+_cmd_class() {  # 0 => some subcommand matches the class regex in $1
+  [[ -n "$WH_SUBCMDS_N" ]] && printf '%s\n' "$WH_SUBCMDS_N" | grep -qE "$1"
+}
+
+# ── Target-dir derivation (issue #57) ─────────────────────────────────────────
+# Tier 1 must read the manifest the command operates on, not blindly $CWD:
+# `cd packages/api && npm install` runs its lifecycle scripts in packages/api while
+# the session cwd stays at the root. Walk the segments tracking a virtual cwd
+# through `cd`, and honour --prefix (npm), --cwd (yarn), --dir (pnpm), -C (pnpm/git)
+# on a gated segment. Anything unresolvable falls back to $CWD — the pre-#57
+# behavior, never less coverage. $CWD is always first in the set.
+TARGET_DIRS=("$CWD")
+_add_target() { local d; for d in "${TARGET_DIRS[@]}"; do [[ "$d" == "$1" ]] && return 0; done; TARGET_DIRS+=("$1"); }
+_resolve_dir() {  # $1 = path token  $2 = base dir -> absolute path (not canonicalized)
+  # shellcheck disable=SC2088  # the "~"* arms match a LITERAL leading tilde in the token, then expand it ourselves
+  case "$1" in
+    /*)        printf '%s' "$1" ;;
+    "~"|"~/"*) printf '%s%s' "$HOME" "${1#\~}" ;;
+    *)         printf '%s/%s' "$2" "$1" ;;
+  esac
+}
+if [[ -n "$WH_SUBCMDS" ]]; then
+  _vcwd="$CWD"
+  while IFS= read -r _seg; do
+    [[ -z "$_seg" ]] && continue
+    case "$_seg" in
+      cd)     _vcwd="$HOME"; continue ;;
+      cd\ *)
+        _d="${_seg#cd }"; _d="${_d#"${_d%%[![:space:]]*}"}"   # ltrim
+        _d="${_d%%[[:space:]]*}"                              # first arg only
+        _d="${_d#[\"\']}"; _d="${_d%[\"\']}"                  # strip simple quoting
+        [[ -n "$_d" && "$_d" != "-" ]] && _vcwd=$(_resolve_dir "$_d" "$_vcwd")
+        continue ;;
+    esac
+    printf '%s\n' "$_seg" | sed -E "$WH_DIROPT_STRIP" | grep -qE "$GATE_RE|$GIT_RE|$PYGATE_RE" || continue
+    _t="$_vcwd"
+    _d=$(printf '%s\n' "$_seg" | sed -nE 's/.*[[:space:]](--prefix|--cwd|--dir|-C)[= ]([^[:space:]]+).*/\2/p' | head -n1)
+    [[ -n "$_d" ]] && _t=$(_resolve_dir "$_d" "$_vcwd")
+    [[ -d "$_t" ]] && _add_target "$_t"
+  done <<<"$WH_SUBCMDS"
+fi
 
 # ── Fast content greps: ripgrep when available ────────────────────────────────
 # KEY-DECISION 2026-06-06: the two content scans (Tier 1 project source, Tier 2
@@ -196,13 +258,13 @@ RUN_T1=0 RUN_T2=0 UPDATE_CACHE=0
 case "$EVENT" in
   PreToolUse)
     MODE=pre_tool
-    if echo "$COMMAND" | grep -qE "$GATE_RE"; then
+    if _cmd_class "$GATE_RE"; then
       RUN_T1=1
       # install-class: the package.json lifecycle gate (Tier 1) is the pre-execution
       # check that matters; the heavy node_modules walk is the OLD state, low value —
       # PostToolUse re-scans the fresh tree. exec-class: scan only if deps drifted.
-      echo "$COMMAND" | grep -qE "$INSTALL_RE" || { deps_changed && { RUN_T2=1; UPDATE_CACHE=1; }; }
-    elif echo "$COMMAND" | grep -qE "$PYGATE_RE"; then
+      _cmd_class "$INSTALL_RE" || { deps_changed && { RUN_T2=1; UPDATE_CACHE=1; }; }
+    elif _cmd_class "$PYGATE_RE"; then
       # Python interpreter/installer: Tier 0 (always) is the .pth gate we need pre-exec;
       # add Tier 1. NEVER Tier 2 (node_modules irrelevant).
       RUN_T1=1
@@ -212,15 +274,15 @@ case "$EVENT" in
     ;;
   PostToolUse)
     MODE=post_tool
-    if echo "$COMMAND" | grep -qE "$INSTALL_RE"; then
+    if _cmd_class "$INSTALL_RE"; then
       RUN_T1=1; RUN_T2=1; UPDATE_CACHE=1                # fresh deps => full scan + refresh
-    elif echo "$COMMAND" | grep -qE "$GIT_RE"; then
+    elif _cmd_class "$GIT_RE"; then
       # git just rewrote the working tree: new source + lifecycle scripts + .pth/.claude
       # persistence can all arrive with no install. Tier 0 always runs; add Tier 1, and
       # Tier 2 only if the dep fingerprint drifted (e.g. the pull moved package-lock.json).
       RUN_T1=1
       deps_changed && { RUN_T2=1; UPDATE_CACHE=1; }
-    elif echo "$COMMAND" | grep -qE "$PYINSTALL_RE"; then
+    elif _cmd_class "$PYINSTALL_RE"; then
       # pip/uv install just landed: a malicious *.pth can be freshly written into
       # site-packages. Re-run Tier 0 (the .pth gate) + Tier 1; node_modules is untouched.
       RUN_T1=1
@@ -473,11 +535,17 @@ _persist_scan 0 1 2
 # whose command IS a remote-script-to-shell pipe (curl … | sh), which names no dropper
 # file. MALWARE_REMOTE_EXEC_RE is shared with the git-hook scan below: same injected-
 # command threat, so the same block-safe behavioral marker applies to both surfaces.
-for cfg in \
-  "${CWD}/.claude/settings.json"  "${HOME}/.claude/settings.json" \
-  "${CWD}/.cursor/mcp.json"       "${HOME}/.cursor/mcp.json" \
-  "${CWD}/.vscode/mcp.json"       "${HOME}/.continue/config.json" \
-  "${CWD}/.vscode/tasks.json"     "${HOME}/.windsurf/mcp.json"; do
+# Project-relative configs are checked in EVERY target dir (TARGET_DIRS[0] is $CWD;
+# a `cd`/--prefix form adds the dir the command actually operates on — issue #57).
+cfg_list=(
+  "${HOME}/.claude/settings.json" "${HOME}/.cursor/mcp.json"
+  "${HOME}/.continue/config.json" "${HOME}/.windsurf/mcp.json"
+)
+for _t in "${TARGET_DIRS[@]}"; do
+  cfg_list+=( "$_t/.claude/settings.json" "$_t/.cursor/mcp.json"
+              "$_t/.vscode/mcp.json"      "$_t/.vscode/tasks.json" )
+done
+for cfg in "${cfg_list[@]}"; do
   [[ -f "$cfg" ]] || continue
   # del(.permissions): permission allow/deny rules legitimately carry behavioral
   # patterns (e.g. a `Bash(curl * | bash*)` DENY rule the user added for safety),
@@ -654,34 +722,64 @@ fi
 if [[ "$RUN_T1" == 1 ]]; then
   # Install-time: scan package.json lifecycle scripts for dropper patterns. This is
   # the one check that fires BEFORE malicious code executes (preinstall fires even
-  # if install later fails), so it's the real pre-install gate.
-  PKG_JSON="${CWD}/package.json"
-  if [[ -f "$PKG_JSON" ]]; then
+  # if install later fails), so it's the real pre-install gate. It reads the manifest
+  # of EVERY target dir plus every workspace package under each (issue #57): a root
+  # `npm install` runs each workspace's own preinstall, so the root-only read never
+  # inspected the surface an attacker actually reaches. Workspace globs come from
+  # package.json `workspaces` (array or {packages}) and pnpm-workspace.yaml list
+  # items; a negation (!…) is skipped, and node_modules matches are filtered (that
+  # surface is Tier 2's). The glob is untrusted manifest data but its expansion only
+  # feeds [[ -f ]] tests and jq file args — never a command line.
+  _ws_globs() {  # $1 = root dir -> workspace glob patterns, one per line
+    [[ -f "$1/package.json" ]] && jq -r '.workspaces // []
+      | if type == "object" then (.packages // []) else . end | .[]?' "$1/package.json" 2>/dev/null
+    [[ -f "$1/pnpm-workspace.yaml" ]] && sed -nE "s/^[[:space:]]*-[[:space:]]*[\"']?([^\"']+)[\"']?[[:space:]]*\$/\1/p" "$1/pnpm-workspace.yaml"
+  }
+  manifests=()
+  _add_manifest() { local m; for m in ${manifests[@]+"${manifests[@]}"}; do [[ "$m" == "$1" ]] && return 0; done; manifests+=("$1"); }
+  for _t in "${TARGET_DIRS[@]}"; do
+    [[ -f "$_t/package.json" ]] && _add_manifest "$_t/package.json"
+    while IFS= read -r _g; do
+      [[ -z "$_g" || "$_g" == \!* ]] && continue
+      # Intentional unquoted glob expansion of the workspace pattern, relative to
+      # the root. No nullglob on bash 3.2: a no-match leaves the literal '*' path,
+      # which the -f test rejects.
+      for _m in "$_t"/$_g/package.json; do
+        [[ -f "$_m" && "$_m" != */node_modules/* ]] && _add_manifest "$_m"
+      done
+    done < <(_ws_globs "$_t")
+  done
+  for PKG_JSON in ${manifests[@]+"${manifests[@]}"}; do
     bad_scripts=$(jq -r '.scripts // {} | to_entries[]
       | select(.key | test("^(pre|post)?install$|^prepare$"))
       | .value' "$PKG_JSON" 2>/dev/null \
       | grep -iE "$MALWARE_DROPPER_TOKENS_RE"'|bun\.sh/install|node .*\.cjs.*curl|curl[^|]*\|[^|]*(sh|node|bash)' || true)
-    if [[ -n "$bad_scripts" ]]; then
-      alert "MALICIOUS LIFECYCLE SCRIPT IN package.json" "$(cat <<BODY
-package.json has an install-lifecycle script matching a known Shai-Hulud dropper:
+    [[ -z "$bad_scripts" ]] && continue
+    alert "MALICIOUS LIFECYCLE SCRIPT IN package.json" "$(cat <<BODY
+$PKG_JSON has an install-lifecycle script matching a known Shai-Hulud dropper:
 $bad_scripts
 ${COMMAND:+Command blocked: $COMMAND}
 
 This runs automatically on npm/pnpm/yarn/bun install (preinstall fires even if
-install later fails). Do NOT install.
-  1. git log -p -- package.json  (find who injected it)
+install later fails — and a root install runs the lifecycle of every workspace).
+Do NOT install.
+  1. git log -p -- "$PKG_JSON"  (find who injected it)
   2. Reinstall third-party deps with --ignore-scripts until cleared
   3. Rotate npm tokens + GitHub PATs if this was already installed once
 BODY
 )"
-    fi
-  fi
+  done
 
   # Release-config poisoning (SANDWORM_MODE): an injected semantic-release / release-it
   # exec step that require()s a hidden carrier dep at publish time. `@semantic-release/
   # exec` alone is legit, so MALWARE_RELEASERC_RE matches only the carrier tell.
-  for rc in "${CWD}/.releaserc" "${CWD}/.releaserc.json" "${CWD}/.releaserc.yaml" \
-            "${CWD}/.releaserc.yml" "${CWD}/.release-it.json" "${CWD}/release.config.js"; do
+  # Checked in every target dir (issue #57), like the lifecycle gate above.
+  rc_list=()
+  for _t in "${TARGET_DIRS[@]}"; do
+    rc_list+=( "$_t/.releaserc" "$_t/.releaserc.json" "$_t/.releaserc.yaml"
+               "$_t/.releaserc.yml" "$_t/.release-it.json" "$_t/release.config.js" )
+  done
+  for rc in "${rc_list[@]}"; do
     [[ -f "$rc" ]] || continue
     rc_hit=$(grep -iE "$MALWARE_RELEASERC_RE" "$rc" 2>/dev/null | head -1)
     [[ -z "$rc_hit" ]] && continue
@@ -702,9 +800,11 @@ BODY
 
   # Workflow poisoning (SANDWORM_MODE ci-quality campaign): known-bad action/persona
   # slugs in .github/workflows. pull_request_target alone is legit and NOT flagged —
-  # only the campaign fingerprints (see MALWARE_WORKFLOW_RE) trip this.
-  if [[ -d "${CWD}/.github/workflows" ]]; then
-    wf_hit=$(grep -rilE "$MALWARE_WORKFLOW_RE" "${CWD}/.github/workflows" 2>/dev/null | head -1)
+  # only the campaign fingerprints (see MALWARE_WORKFLOW_RE) trip this. Checked in
+  # every target dir (issue #57).
+  for _t in "${TARGET_DIRS[@]}"; do
+    [[ -d "$_t/.github/workflows" ]] || continue
+    wf_hit=$(grep -rilE "$MALWARE_WORKFLOW_RE" "$_t/.github/workflows" 2>/dev/null | head -1)
     if [[ -n "$wf_hit" ]]; then
       alert "MALICIOUS GITHUB ACTIONS WORKFLOW" "$(cat <<BODY
 $wf_hit references a known supply-chain campaign action / marker.
@@ -720,7 +820,7 @@ Immediate steps:
 BODY
 )"
     fi
-  fi
+  done
 
   # Project source scan: an attacker with repo write-access can inject the loader into
   # ANY file (Microsoft's case was server/routes/api/auth.js), so scan the tree broadly.
@@ -732,14 +832,20 @@ BODY
   # bounded by the hook-level `timeout` in hooks.json (the harness kills the whole
   # hook past that), which is set high enough that only a genuinely pathological
   # tree hits it.
+  # Walk $CWD plus any target dir NOT under it (a `cd ../other && npm install`
+  # form — issue #57); a target inside $CWD is already covered by the $CWD walk.
+  src_roots=("$CWD")
+  for _t in "${TARGET_DIRS[@]}"; do
+    case "$_t" in "$CWD"|"$CWD"/*) : ;; *) src_roots+=("$_t") ;; esac
+  done
   if _rg_ok "$MALWARE_INJECT_RE"; then
     inject_out=$("$RG_BIN" -la --no-ignore --hidden \
       -g '*.{js,mjs,cjs,ts,mts,cts,jsx,tsx}' \
       -g '!node_modules' -g '!.git' \
       -g '!dist' -g '!build' -g '!.next' -g '!.output' \
-      -e "$MALWARE_INJECT_RE" "$CWD" 2>/dev/null)
+      -e "$MALWARE_INJECT_RE" "${src_roots[@]}" 2>/dev/null)
   else
-    inject_out=$(grep -rlE "$MALWARE_INJECT_RE" "$CWD" \
+    inject_out=$(grep -rlE "$MALWARE_INJECT_RE" "${src_roots[@]}" \
       --include="*.js"  --include="*.mjs" --include="*.cjs" \
       --include="*.ts"  --include="*.mts" --include="*.cts" \
       --include="*.jsx" --include="*.tsx" \

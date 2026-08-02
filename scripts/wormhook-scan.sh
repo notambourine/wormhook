@@ -556,10 +556,18 @@ TXT
 
 # ══ git-hook ═════════════════════════════════════════════════════════════════════
 # Invoked by the installed post-merge/post-checkout/post-rewrite hooks. On an IOC it
-# prints a LOUD red banner right after the `git pull` — showing what the update changed
+# prints a red banner right after the `git pull` — showing what the update changed
 # and the finding — so you SEE it and do not go on to run `npm run dev`. A post-op hook
 # cannot block the pull (the files already landed); the human-visible error is the gate.
 # Fail-open: any error exits 0 so it never wedges a git operation.
+#
+# KEY-DECISION 2026-08-02: every line here is budgeted for an LLM context, not just a
+# terminal — a `git pull` inside Claude Code puts this whole block in the transcript on
+# top of the PostToolUse verdict. Red keeps ONE banner line (colour, not rules, carries
+# the alarm), the changed-file list is capped at CHANGED_MAX with an honest "N of M"
+# count, and green is a short repo-basename line. Do not re-add ASCII rules or raise the
+# cap for emphasis; loudness comes from the glyph and the colour.
+CHANGED_MAX=20
 cmd_git_hook() {
   local hook="${1:-}"; [ $# -gt 0 ] && shift   # $1=hook name; remaining "$@" are git's hook args
   local repo changed="" out glyph
@@ -568,28 +576,28 @@ cmd_git_hook() {
   # pre-op HEAD only for merge/rebase; post-checkout instead passes <prev> <new> on
   # argv (and a third flag arg: 1=branch move, 0=file checkout => no meaningful range).
   # Legacy installs forward no hook name (hook="") => fall through to the ORIG_HEAD path.
+  # `--stat-count` truncates in git itself, so the trailing "N files changed" summary
+  # still reports the true total even when the list above it is clipped.
   case "$hook" in
     post-checkout)
       [ "${3:-1}" = 1 ] && [ -n "${1:-}" ] && [ -n "${2:-}" ] && \
-        changed=$(git -C "$repo" diff --stat "$1" "$2" 2>/dev/null | tail -n 50) ;;
+        changed=$(git -C "$repo" diff --stat=100 --stat-count="$CHANGED_MAX" "$1" "$2" 2>/dev/null) ;;
     *)
       git -C "$repo" rev-parse -q --verify ORIG_HEAD >/dev/null 2>&1 && \
-        changed=$(git -C "$repo" diff --stat ORIG_HEAD HEAD 2>/dev/null | tail -n 50) ;;
+        changed=$(git -C "$repo" diff --stat=100 --stat-count="$CHANGED_MAX" ORIG_HEAD HEAD 2>/dev/null) ;;
   esac
   out=$(_scan_one "$repo" fast); glyph=$(printf '%s' "$out" | _glyph)
   if [[ "$glyph" == "🚨" ]]; then
-    printf '\033[1;31m\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n⛔  wormhook: SUPPLY-CHAIN IOC after a git update\n    %s\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n' "${repo/#$HOME/~}"
-    [[ -n "${changed:-}" ]] && printf '\n📋 files this update changed:\n%s\n' "$changed"
+    printf '\033[1;31m⛔ wormhook: SUPPLY-CHAIN IOC after a git update — %s\033[0m\n' "${repo/#$HOME/~}"
+    [[ -n "${changed:-}" ]] && printf '📋 this update changed:\n%s\n' "$changed"
     printf '%s\n' "$(printf '%s' "$out" | _detail)"
-    printf '\033[1;31m\n⚠  Do NOT run npm/node/dev in this repo until you have cleared the finding above.\033[0m\n'
-    # shellcheck disable=SC2016  # literal instruction text shown to the user, not an expansion
-    printf '   (optional backstop: eval "$(wormhook-scan shell-init)" makes npm/pnpm refuse to run here automatically.)\n'
+    printf '\033[1;31m⚠ Do NOT run npm/node/dev here until you have cleared that finding.\033[0m\n'
     return "$EXIT_CRIT"
   fi
   [[ "$glyph" == "🟡" ]] && printf '%s' "$out" | _systemmsg
-  # Clean pass: one quiet green line so a no-finding pull still confirms the scan ran
-  # (deliberately a single line, no banner — the 🚨 path owns the loud surface).
-  [[ "$glyph" == "🟢" ]] && printf '\033[0;32m🟢 wormhook: %s clean after git update\033[0m\n' "${repo/#$HOME/~}"
+  # Clean pass: one short green line so a no-finding pull still confirms the scan ran.
+  # Basename, not the full path — git already told you which repo you are in.
+  [[ "$glyph" == "🟢" ]] && printf '\033[0;32m🟢 wormhook: %s clean\033[0m\n' "${repo##*/}"
   return "$EXIT_OK"
 }
 

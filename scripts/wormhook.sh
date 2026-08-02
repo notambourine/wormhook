@@ -139,7 +139,14 @@ _rg_ok() {  # 0 => rg exists and compiles this pattern
 # ── Scan-cache (Tier 2 only) ──────────────────────────────────────────────────
 # Marker stores a key = lockfile hash + node_modules dir-tree mtime (depth ≤2).
 # Match => deps unchanged since the last CLEAN scan => skip the expensive walk.
-# Derived state, never synced.
+# A fresh-enough marker, that is: the key is blind to an in-place OVERWRITE of an
+# existing node_modules file (a dir mtime moves on create/delete/rename, never on
+# a write; no install ran, so the lockfile is untouched) — exactly how Shai-Hulud
+# 2.0 spreads between repos on one machine (issue #55). The marker is rewritten
+# after every clean full walk, so its mtime IS the last-scan time; deps_changed
+# ages it out (default 24h, WORMHOOK_T2_TTL_HOURS) to bound that blind window
+# instead of folding a per-file signal into the key, which would cost the very
+# walk the cache exists to avoid. Derived state, never synced.
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/notambourine/malware-scan"
 MARKER="$CACHE_DIR/$(printf '%s' "$CWD" | shasum -a 256 | awk '{print $1}')"
 _tree_mtime() {
@@ -155,8 +162,8 @@ _tree_mtime() {
   # optimizer) are pruned from the KEY ONLY: they churn on every format/build,
   # invalidating the clean-scan marker daily for repos whose deps never changed.
   # ACCEPTED GAP: a payload planted inside a pruned dir is key-invisible — Tier 2
-  # only re-walks it when the lockfile or a tracked dir changes, a window that
-  # can stay open indefinitely in a stable repo. Accepted because these dirs are
+  # only re-walks it when the lockfile or a tracked dir changes, or when the
+  # marker TTL expires (see deps_changed). Accepted because these dirs are
   # tool-managed scratch, not require()d code paths, and the alternative was a
   # daily false re-scan. NOTE: creating/removing the pruned dir itself still
   # bumps node_modules' root mtime; only churn INSIDE these dirs is hidden.
@@ -173,9 +180,12 @@ _scan_key() {
   done
   printf '%s:%s' "$sig" "$(_tree_mtime)"
 }
-deps_changed() {            # 0 = changed/never-scanned (=> scan); 1 = unchanged (=> skip)
+deps_changed() {            # 0 = changed/never-scanned/expired (=> scan); 1 = unchanged (=> skip)
   [[ -d "$NODE_MODULES" ]] || return 1
   [[ -f "$MARKER" ]] || return 0
+  local ttl="${WORMHOOK_T2_TTL_HOURS:-24}"
+  [[ "$ttl" =~ ^[0-9]+$ && "$ttl" -ge 1 ]] || ttl=24   # garbage/0 => default, never "never expire"
+  [[ -n "$(find "$MARKER" -mmin +"$((ttl * 60))" 2>/dev/null)" ]] && return 0
   local saved; read -r saved < "$MARKER"
   [[ "$saved" == "$(_scan_key)" ]] && return 1 || return 0
 }

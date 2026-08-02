@@ -247,6 +247,41 @@ else
   _bad "git-hook body never self-flags" "wormhook-scan.sh or git unavailable — cannot synthesize the real hook body"
 fi
 
+# ══════════════════════════════════════════════════════════════════════════════════
+# 5. TIER-2 SCAN-CACHE — a clean install-class walk populates the marker and a later
+#    SessionStart reuses it. The key (lockfile hash + dir mtimes) is blind to an
+#    in-place OVERWRITE of an existing dep file (issue #55): no create/delete/rename
+#    moves a dir mtime, and no install ran so the lockfile is untouched. The marker
+#    TTL is what bounds that window — an expired marker forces the full walk.
+# ══════════════════════════════════════════════════════════════════════════════════
+_mktemp_case
+mkdir -p "$CASE_CWD/node_modules/leftpad"
+printf '{"name":"t","version":"1.0.0"}' > "$CASE_CWD/package.json"
+printf '{"lockfileVersion":3,"packages":{}}' > "$CASE_CWD/package-lock.json"
+printf 'module.exports=function(){return 1}\n' > "$CASE_CWD/node_modules/leftpad/index.js"
+# Same derivation the engine uses: sha256 of the CWD string under XDG_CACHE_HOME.
+MARKER_FILE="$CASE_CACHE/notambourine/malware-scan/$(printf '%s' "$CASE_CWD" | shasum -a 256 | awk '{print $1}')"
+
+OUT="$(_run_engine "$(_payload PostToolUse 'npm install')")"
+assert_jq "T2 cache: clean install-class walk stays green" "$OUT" '.verdict=="green"'
+if [[ -f "$MARKER_FILE" ]]; then
+  _ok "T2 cache: marker written after clean walk"
+else
+  _bad "T2 cache: marker written after clean walk" "missing $MARKER_FILE"
+fi
+
+OUT="$(_run_engine "$(_payload SessionStart)")"
+assert_jq "T2 cache: fresh marker + unchanged key -> SessionStart reuses cache" "$OUT" \
+  '.verdict=="green" and (.systemMessage|contains("cached, deps unchanged"))'
+
+# Overwrite an EXISTING dep file (the key cannot see this), then expire the marker by
+# backdating it past the 24h TTL: the next SessionStart must re-walk and go red.
+printf '%s\n' "$MAL_DECODE_EVAL" > "$CASE_CWD/node_modules/leftpad/index.js"
+touch -t 202001010000 "$MARKER_FILE" 2>/dev/null
+OUT="$(_run_engine "$(_payload SessionStart)")"
+assert_jq "T2 cache TTL: expired marker re-walks and catches in-place overwrite" "$OUT" \
+  '.verdict=="red" and (.findings|map(.title)|any(contains("NPM SUPPLY-CHAIN MALWARE")))'
+
 echo
 printf 'tests: %d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

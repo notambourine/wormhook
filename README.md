@@ -174,8 +174,11 @@ can find something new:
   install before it can run a dropper.
 - **Tier 2 — `node_modules` content/IOC scan** (expensive): runs only when deps changed
   (keyed off lockfile hash + `node_modules` dir mtimes ≤2 deep, cached under
-  `~/.cache/notambourine/`). **Fails open** — a scan that hits its `timeout` reports 🟡
-  and doesn't refresh the cache, so it never blocks your launch.
+  `~/.cache/notambourine/`) or when the last clean scan is older than 24 hours
+  (`WORMHOOK_T2_TTL_HOURS`) — the key cannot see an in-place overwrite of an existing
+  dep file, so the cache ages out to bound that window. **Fails open** — a scan that
+  hits its `timeout` reports 🟡 and doesn't refresh the cache, so it never blocks your
+  launch.
 
 ### Beyond the tiers
 
@@ -256,7 +259,7 @@ flowchart TD
     T1c -- hit --> G
     T1c -- clean --> CACHE
 
-    CACHE{deps changed?<br/>lockfile hash + dir mtimes ≤2 deep}:::cache
+    CACHE{deps changed?<br/>lockfile hash + dir mtimes ≤2 deep, 24h TTL}:::cache
     CACHE -- "no — cache hit" --> DONE
     CACHE -- "yes / stale" --> T2
 

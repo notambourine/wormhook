@@ -13,6 +13,7 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       # Egress monitoring of the runner itself (StepSecurity). Must be the first
       # step. audit = observe-only, never blocks; the per-run insights link in the
@@ -209,6 +210,7 @@ jobs:
   # Source-only tree (no node_modules to deep-walk) -> mode: fast.
   wormhook-self:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:

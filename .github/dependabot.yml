@@ -15,3 +15,7 @@ updates:
         update-types:
           - minor
           - patch
+      security:
+        applies-to: security-updates
+        patterns:
+          - "*"

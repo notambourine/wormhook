@@ -161,7 +161,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: npm ci                       # optional — installs deps so the deep scan sees them
-      - uses: notambourine/wormhook@v0.13.0
+      - uses: notambourine/wormhook@<sha>  # vX.Y.Z (see "Pinning" below)
         # with:
         #   path: .            # dir to scan (default: workspace root)
         #   mode: deep         # deep = Tier-2 node_modules walk (default); fast = source-only
@@ -171,6 +171,18 @@ jobs:
 A 🚨 verdict fails the job (exit `1`); the finding banner prints above the error annotation. A
 🟡 degraded scan passes by default (set `fail-on: degraded` to fail closed). Like every other
 trigger it is **zero-network** — `stat`/`grep`/`jq` over the tree, no detection logic duplicated.
+
+**Pinning.** Pin the commit a release tag points at, and put that tag in a trailing comment.
+Dependabot reads the pair, version-tracks the action, and opens one PR per wormhook release.
+Resolve the current pair with:
+
+```sh
+gh release view --repo notambourine/wormhook --json tagName,targetCommitish
+```
+
+Pinning a branch-head SHA that no tag points at is the failure mode: Dependabot resolves no
+version, falls back to tracking `main`, and opens a PR for every commit in this repo, including
+CI-only ones that never change the engine.
 
 **This is a *merge* gate, not a push gate — and that is the right shape on github.com.** GitHub's
 only hook that can reject a push as it arrives (`pre-receive`) is **GitHub Enterprise Server

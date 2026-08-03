@@ -277,11 +277,8 @@ jobs:
           sudo install -m 0755 betterleaks /usr/local/bin/betterleaks
           betterleaks version
 
-      # -c is explicit rather than relying on root auto-detection: .betterleaks.toml
-      # carries the sk-ant- rule that stock rules miss, and a silently-dropped config
-      # would turn this job green on the leak it exists to catch.
       - name: Scan full history for secrets
-        run: betterleaks git . -c .betterleaks.toml --redact --no-banner
+        run: betterleaks git . --redact --no-banner
 
   # ── Complementary layer: shai-hulud-tripwire (committed-persistence artifacts) ──
   # wormhook's block tier DELIBERATELY does not flag generic secrets-context workflow

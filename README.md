@@ -400,7 +400,7 @@ you to install the install-firewall ones (Socket Firewall, `vet`).
 | Package existence / typosquatting / maintainer-change (needs registry lookups) | [Socket Firewall](https://docs.socket.dev/docs/socket-firewall), [`safedep/vet`](https://github.com/safedep/vet) |
 | Version-age "cooldown" (refuse versions published in the last N days) | **native now**: pnpm [`minimumReleaseAge`](https://pnpm.io/supply-chain-security) (default-on in pnpm 11), npm `min-release-age`; also Socket Firewall |
 | Known-CVE scanning (needs an advisory feed) | `vet`, `npm audit`, Dependabot |
-| Secret detection | [`betterleaks`](https://github.com/betterleaks/betterleaks), `trufflehog` (this repo runs betterleaks over full history in CI — see `.betterleaks.toml`) |
+| Secret detection | [`betterleaks`](https://github.com/betterleaks/betterleaks), `trufflehog` (this repo runs betterleaks over full history in CI) |
 | Generic Actions hardening (unpinned actions, broad perms) | `actionlint`, `zizmor` |
 | Runtime network monitoring (live C2/DNS exfil/sockets) | install-time sandbox / eBPF monitor |
 | AST + reachability analysis | [depsec](https://depsec.dev/) |

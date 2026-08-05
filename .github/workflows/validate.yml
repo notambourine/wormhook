@@ -307,7 +307,7 @@ jobs:
   # .tripwire-allow so CI and the local SessionStart tripwire hook agree on what is a
   # documented-IOC false positive (filename/hash/lifecycle hits are never exempted).
   tripwire:
-    uses: notambourine/shai-hulud-tripwire/.github/workflows/tripwire.yml@6ee8deb3ee3af134921724a30f22ee30d08634cb # v1.1.1
+    uses: notambourine/shai-hulud-tripwire/.github/workflows/tripwire.yml@d58d0e6e2185e1388a4e1fc96f246115b9fd216b # v1.1.3
     permissions:
       contents: read
     with:

@@ -4,8 +4,8 @@
 # indefinitely (a stale pre-ripgrep install once spent 6 days timing out at 20s/session while the fix
 # sat unused in the cache). The executing copy lives at plugins/cache/<marketplace>/<plugin>/<version>/;
 # compare its manifest version against the marketplace clone's.
-#   🟢 up to date.  🟡 self lags marketplace -> claude plugin update (silenceable).
-#   ⚪ not a marketplace cache layout (dev checkout), or silenced.
+#   silent up to date, or not a marketplace cache layout (dev checkout).
+#   🟡 self lags marketplace -> claude plugin update (silenceable).  ⚪ lagging but silenced.
 # Version strings flow through jq --arg at emit time, so no whitelist is needed.
 set -uo pipefail
 
@@ -26,12 +26,8 @@ case "$PLUGIN_ROOT" in
       else
         wh_flag 🟡 drift "running v$self_ver but marketplace has v$mkt_ver — run: claude plugin update wormhook@$mkt [silence: WORMHOOK_SKIP_DRIFT=1]"
       fi
-    else
-      wh_flag 🟢 drift "up to date (v${self_ver:-?})"
     fi
     ;;
-  *)
-    wh_flag ⚪ drift "n/a — not a marketplace install (dev checkout)"
-    ;;
 esac
+# Up-to-date and dev-checkout cases fall through silent (advisory check — doctor/CLAUDE.md).
 exit 0

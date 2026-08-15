@@ -6,21 +6,18 @@ before it can run. It binds to Claude Code's tool lifecycle and blocks `npm`/`pn
 Named for the threat it headlines: Shai-Hulud, the self-replicating npm *worm* —
 stopped at the hook.
 
-**This is one lock, not the whole door.** It's not a replacement for an install-layer
-firewall ([Socket Firewall](https://socket.dev/)) or a dependency auditor
-([`safedep/vet`](https://github.com/safedep/vet)) — it's an *independent* layer at the
-Claude Code agent boundary. Run it **alongside** those, not instead of them; the value
-is independence — a worm that slips one lock still has to beat the others.
-
-**Why this and not just pnpm/Socket?** The install layer is now well-served: pnpm 11 ships
-a release-age [cooldown by default](https://pnpm.io/supply-chain-security) and Socket Firewall
-blocks malicious versions as you install. wormhook deliberately cedes that boundary. Its
-distinct, currently-unoccupied job is *blocking* — not warn-only — on **agent-boundary
-persistence / AGENT-HIJACK**: rogue `SessionStart` hooks and `mcpServers` entries injected
-into `.claude`/`.cursor`/`.continue`/`.vscode` configs, `.vscode/tasks.json` `folderOpen`
-auto-exec, weaponized Python `.pth` startup hooks, poisoned git hooks, and login-persistent
-LaunchAgent/systemd units. That is the half of the supply-chain kill-chain the registry-layer
-tools do not see — and the half that re-runs every time you open the project.
+**This is one lock, not the whole door.** The install layer is well-served — pnpm 11
+ships a release-age [cooldown by default](https://pnpm.io/supply-chain-security),
+[Socket Firewall](https://socket.dev/) blocks malicious versions as you install, and
+[`safedep/vet`](https://github.com/safedep/vet) audits dependencies — so wormhook cedes
+that boundary and runs **alongside** those tools as an independent layer at the Claude
+Code agent boundary. Its distinct job is *blocking* — not warn-only — on
+**agent-boundary persistence / AGENT-HIJACK**: rogue `SessionStart` hooks and
+`mcpServers` entries injected into `.claude`/`.cursor`/`.continue`/`.vscode` configs,
+`.vscode/tasks.json` `folderOpen` auto-exec, weaponized Python `.pth` startup hooks,
+poisoned git hooks, and login-persistent LaunchAgent/systemd units. That is the half of
+the supply-chain kill-chain the registry-layer tools do not see — and the half that
+re-runs every time you open the project.
 
 Built and maintained by [NoTambourine](https://notambourine.com).
 
@@ -34,23 +31,23 @@ claude plugin install wormhook@wormhook --scope user
 Requires `jq` and `bash`. [`ripgrep`](https://github.com/BurntSushi/ripgrep) is
 optional but strongly recommended — content scans use it when present (43× faster than
 BSD grep on large trees) and fall back to `grep` otherwise. There's nothing to invoke;
-it runs automatically. At `SessionStart` a row of doctor status lights (🟢/🟡/🔴/⚪, one per
-check, every session) reports your runtime deps, [engine self-integrity](#threat-model-the-scanner-as-a-target),
-version drift, out-of-band coverage, CI supply-chain-gate coverage, the recommended
-[companion firewalls](#beyond-the-tiers) (Socket Firewall / `vet`), and a blast-radius
-exposure audit — each non-green light carries the one-liner to fix it.
+it runs automatically. At `SessionStart` a doctor dashboard reports health: two
+always-on lights — runtime deps and
+[engine self-integrity](#threat-model-the-scanner-as-a-target) — plus advisory checks
+(version drift, signature-corpus age, out-of-band coverage, CI supply-chain-gate
+coverage, the recommended [companion firewalls](#beyond-the-tiers), a blast-radius
+exposure audit) that stay silent when healthy and speak only with a finding, each
+carrying the one-liner to fix it.
 
 ## Run it outside Claude
 
 The Claude hook only fires inside a Claude Code session. `wormhook-scan` runs the **same
-engine** (Tiers 0–2, same `malware-patterns.sh`) from any shell — for the moments Claude
-is not watching: a `git pull` in a plain terminal, coming back to the machine after a
-while, or a morning fleet check. It is a thin adapter: no detection logic is duplicated,
-so every signature update reaches it for free.
+engine** (Tiers 0–2, same `malware-patterns.sh`) from any shell — a `git pull` in a plain
+terminal, coming back to the machine after a while, a morning fleet check. It is a thin
+adapter with no duplicated detection logic, so every signature update reaches it for free.
 
-The fastest way to set it all up is from inside Claude Code: **`/wormhook-setup`** runs an
-interactive installer (it asks which pieces you want and wires them) — the `SessionStart`
-doctor points you to it. Or do it by hand:
+The fastest setup is from inside Claude Code: **`/wormhook-setup`** runs an interactive
+installer. Or by hand:
 
 ```bash
 # link wormhook-scan onto your PATH (~/.local/bin)
@@ -81,17 +78,17 @@ wormhook-scan install-git-hook           # post-merge/checkout/rewrite audit on 
                                          #   `git pull` in ANY terminal (not just Claude)
 ```
 
-`install-launchd` is the right answer to "scan the machine while I am away" — a native
-LaunchAgent runs `wormhook-scan` on a timer with **no Claude session and no LLM tokens**
-(a cloud-scheduled agent could not see your local filesystem anyway). `install-git-hook`
-cooperates with an existing `core.hooksPath` and never clobbers a hook you already have: on
-every `git pull`/`checkout` it prints a one-line green **`🟢 wormhook: <repo> clean`**
-confirmation, or a **red report of what the update changed plus any IOC** on a finding, so you
-see it before you run `npm run dev`. Both are kept short on purpose — a `git pull` inside
-Claude Code puts this output in the model's context, so the changed-file list is capped at 20
-(the trailing `N files changed` line still gives the true total). (`wormhook-scan status` shows what is
-installed; `uninstall-launchd` / `uninstall-git-hook` reverse cleanly. On Linux,
-`install-launchd` prints a systemd-timer / cron line instead.)
+`install-launchd` scans the machine while you are away: a native LaunchAgent runs
+`wormhook-scan` on a timer with **no Claude session and no LLM tokens**.
+`install-git-hook` cooperates with an existing `core.hooksPath` and never clobbers a hook
+you already have: on every `git pull`/`checkout` it prints a one-line green
+**`🟢 wormhook: <repo> clean`**, or a **red report of what the update changed plus any
+IOC**, so you see it before you run `npm run dev`. Output is kept short on purpose — a
+`git pull` inside Claude Code puts it in the model's context, so the changed-file list is
+capped at 20 (the trailing `N files changed` line gives the true total).
+(`wormhook-scan status` shows what is installed; `uninstall-launchd` /
+`uninstall-git-hook` reverse cleanly. On Linux, `install-launchd` prints a
+systemd-timer / cron line instead.)
 
 **Optional exec-guard — block, don't just warn.** The git hook *warns*; a post-merge hook
 cannot stop files that already landed. To actually refuse to *run* on a compromised repo
@@ -139,10 +136,9 @@ wormhook-scan install-launchd --quarantine    # the hourly sweep contains at 03:
 
 A quarantined artifact is renamed to `<path>.wormhook-quarantined.<epoch>` + `chmod 000`
 — reversible, forensics-preserving, and it can no longer fire on the next login or
-interpreter start. Nothing is killed, unloaded, or deleted (an already-running stealer
-is the network layer's / your job — see the alert's remediation steps), behavioral
-matches stay report-only (an unattended rename demands exact-match confidence), a
-root-owned artifact degrades to the normal advisory, and every action is logged to
+interpreter start. Nothing is killed, unloaded, or deleted; behavioral matches stay
+report-only (an unattended rename demands exact-match confidence); a root-owned artifact
+degrades to the normal advisory; every action is logged to
 `~/.cache/notambourine/malware-scan/quarantine.log`. Default is off everywhere:
 containment inverts the fail-open bias, so it stays a conscious opt-in.
 
@@ -186,14 +182,11 @@ Pinning a branch-head SHA that no tag points at is the failure mode: Dependabot 
 version, falls back to tracking `main`, and opens a PR for every commit in this repo, including
 CI-only ones that never change the engine.
 
-**This is a *merge* gate, not a push gate — and that is the right shape on github.com.** GitHub's
-only hook that can reject a push as it arrives (`pre-receive`) is **GitHub Enterprise Server
-only**; github.com has no equivalent. So the reachable defense is a **ruleset** that *blocks force
-pushes* and *requires a PR*, with this action as a **required status check**: malware can sit on a
-feature branch but the failing check stops the merge into a protected branch. Blocking the force
-push itself is the ruleset's job (content-blind); scanning the content is wormhook's. (On GitHub
-Enterprise Server you *can* wire `wormhook-scan` into a real `pre-receive` hook — a separate
-adapter with a tree-only scan scope.)
+**This is a *merge* gate, not a push gate.** github.com has no `pre-receive` hook
+(GitHub Enterprise Server only), so the reachable defense is a **ruleset** that *blocks
+force pushes* and *requires a PR*, with this action as a **required status check**:
+malware can sit on a feature branch, but the failing check stops the merge into a
+protected branch.
 
 ## How it works
 
@@ -246,8 +239,9 @@ firewall layer it deliberately doesn't reimplement:
   firewall) and [`safedep/vet`](https://github.com/safedep/vet) (dependency CVE + malicious-
   package audit) do, and far better than a hook can. Rather than reimplement a thin version
   of that with its own network calls, wormhook stays **fully local** and the `SessionStart`
-  `firewall` light nudges you to install them (🟢 when both are present) — "run alongside,
-  not instead." `sfw` is the direct answer to "stop me installing a poisoned version."
+  `firewall` light nudges you to install them (silent when both are present) — "run
+  alongside, not instead." `sfw` is the direct answer to "stop me installing a poisoned
+  version."
 
 ### Blast-radius exposure audit
 
@@ -259,7 +253,7 @@ positioned to own is a read-only, advisory **posture check** — it already runs
 and already encodes the exact paths the worms harvest.
 
 The `SessionStart` `exposure` light prints a machine-specific punch list of **long-lived secrets
-sitting in worm-targeted paths** — what would get exfiltrated if you're hit (🟢 when clean):
+sitting in worm-targeted paths** — what would get exfiltrated if you're hit (silent when clean):
 
 - **Passphrase-less SSH private keys** (detected via `ssh-keygen -y -P ''`, which catches the new
   OpenSSH key format that grepping for `ENCRYPTED` misses) — and names the specific key files.
@@ -444,6 +438,12 @@ any local modification, and a marketplace update restores a clean copy.
 All signatures live in one file — [`scripts/malware-patterns.sh`](./scripts/malware-patterns.sh) —
 sourced by the hook so a new pattern reaches every tier at once. Patterns are extended
 regex and parse identically under bash and zsh.
+
+Signature detection is retrospective, so freshness is tracked: `WORMHOOK_SIGNATURES_ASOF`
+in that file records when the corpus was last verified against current advisories, and
+the `SessionStart` `sigage` light goes 🟡 when it ages past `WORMHOOK_SIGAGE_MAX_DAYS`
+(default 60) — a stale corpus would otherwise keep reporting green while detecting only
+last year's campaigns.
 
 ## Sources
 

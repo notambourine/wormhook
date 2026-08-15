@@ -5,7 +5,7 @@
 # no secret VALUE is ever read into the message, only paths/filenames (and those flow through jq --arg,
 # so naming the offending file is injection-safe). Scoped to three near-zero-FP checks so it stays a
 # punch list, not a nag — the npm-token and static-AWS-creds candidates stay deferred to hold that bar.
-#   🟢 nothing found.  🟡 N secret class(es) found (+ advisory additionalContext).
+#   silent nothing found (advisory check).  🟡 N secret class(es) found (+ advisory additionalContext).
 set -uo pipefail
 
 # shellcheck source=scripts/doctor/_utils.sh disable=SC1091
@@ -46,10 +46,7 @@ if [[ -f "$PWD/.env" ]] && \
   audit+=("plaintext .env in this repo holds a live-looking secret — inject from a secrets manager and keep .env out of git")
 fi
 
-if (( ${#audit[@]} == 0 )); then
-  wh_flag 🟢 exposure "no long-lived secrets in worm-targeted paths"
-  exit 0
-fi
+(( ${#audit[@]} == 0 )) && exit 0   # clean => silent (no green line — doctor/CLAUDE.md)
 
 msg="🟡 [wormhook] exposure — ${#audit[@]} long-lived secret class(es) in worm-targeted paths (what gets exfiltrated if detection misses):"
 for _l in "${audit[@]}"; do msg+=$'\n  • '"$_l"; done

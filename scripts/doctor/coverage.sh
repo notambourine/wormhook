@@ -2,7 +2,7 @@
 # SessionStart doctor — out-of-band trigger coverage. The Claude hook is one trigger, not the
 # engine; wormhook-scan.sh adds the non-Claude triggers. Reports which are wired:
 #   CLI on PATH · global git hook (all 3 of post-merge/post-checkout/post-rewrite) · hourly launchd sweep.
-#   🟢 all wired.  🟡 any ✗ -> shows the ✓/✗ picture + points at /wormhook-setup (silenceable).
+#   silent all wired.  🟡 any ✗ -> shows the ✓/✗ picture + points at /wormhook-setup (silenceable).
 #   ⚪ silenced, or corrupt install (shared constants did not load).  launchd sweep is n/a off macOS.
 set -uo pipefail
 
@@ -35,7 +35,7 @@ else
 fi
 
 if [[ "$_cli" == "✓" && "$_hook" == "✓" && ( "$_sweep" == "✓" || "$_sweep" == "n/a" ) ]]; then
-  wh_flag 🟢 coverage "out-of-band wired (CLI:$_cli git-hook:$_hook hourly-sweep:$_sweep)"
+  exit 0   # fully wired => silent (advisory check, no green line — doctor/CLAUDE.md)
 elif wh_silenced "${WORMHOOK_SKIP_COVERAGE:-}"; then
   wh_flag ⚪ coverage "out-of-band incomplete (CLI:$_cli git-hook:$_hook hourly-sweep:$_sweep) (silenced)"
 else

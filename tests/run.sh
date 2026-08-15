@@ -26,6 +26,12 @@
 
 set -uo pipefail
 
+# Developer machines export engine/doctor knobs via settings.json "env" (e.g.
+# WORMHOOK_QUARANTINE=1 flips the default-off case flag-on). Flag-on cases re-export.
+unset WORMHOOK_QUARANTINE WORMHOOK_T2_TTL_HOURS WORMHOOK_DOCTOR_QUIET WORMHOOK_SIGAGE_MAX_DAYS
+# shellcheck disable=SC2046  # word-splitting the name list is the point
+unset $(compgen -v WORMHOOK_SKIP_ 2>/dev/null) 2>/dev/null || true
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENGINE="$REPO_ROOT/scripts/wormhook.sh"
 SCAN_CLI="$REPO_ROOT/scripts/wormhook-scan.sh"

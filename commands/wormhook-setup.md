@@ -13,8 +13,10 @@ are only wiring up *triggers*.
 Set `SCRIPT` to the first of these that exists, then use it for every command below:
 
 ```bash
-SCRIPT="$(claude plugin root wormhook 2>/dev/null)/scripts/wormhook-scan.sh"
-[ -f "$SCRIPT" ] || SCRIPT="$HOME/.claude/plugins/marketplaces/notambourine/scripts/wormhook-scan.sh"
+SCRIPT="${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/wormhook-scan.sh}"
+# Fallback searches every install layout: marketplace dir, and the external_plugins/ nesting
+# a plugin gets when it is installed through another marketplace's catalog.
+[ -f "$SCRIPT" ] || SCRIPT="$(find "$HOME/.claude/plugins" -maxdepth 6 -path '*/scripts/wormhook-scan.sh' -print 2>/dev/null | head -1)"
 [ -f "$SCRIPT" ] && echo "using: $SCRIPT" || echo "NOT FOUND"
 ```
 

@@ -1,6 +1,6 @@
 {
   "$schema": "https://www.schemastore.org/claude-code-marketplace.json",
-  "name": "notambourine",
+  "name": "wormhook",
   "description": "Supply-chain security tooling for Claude Code, by NoTambourine.",
   "owner": {
     "name": "NoTambourine LLC",

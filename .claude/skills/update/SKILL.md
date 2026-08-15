@@ -1,6 +1,6 @@
 ---
 name: update
-description: Add detection for a new npm/PyPI supply-chain worm or campaign to wormhook. Use when a new advisory drops (Socket/Snyk/Wiz/Unit42/Mend/Microsoft/Datadog/CISA/JFrog) and you want to source its IOCs, verify them against primary sources, place each signature in the right tier, and open a patch PR. Triggers: "add a signature", "new Shai-Hulud variant", "update wormhook for <campaign>", "a new worm dropped".
+description: 'Add detection for a new npm/PyPI supply-chain worm or campaign to wormhook. Use when a new advisory drops (Socket/Snyk/Wiz/Unit42/Mend/Microsoft/Datadog/CISA/JFrog) and you want to source its IOCs, verify them against primary sources, place each signature in the right tier, and open a patch PR. Triggers: "add a signature", "new Shai-Hulud variant", "update wormhook for <campaign>", "a new worm dropped".'
 ---
 
 # Adding a new campaign to wormhook

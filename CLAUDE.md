@@ -1,241 +1,196 @@
 # wormhook — operating context for Claude
 
 A Claude Code plugin: a tiered shell hook that scans for npm/node (and landed PyPI)
-supply-chain malware and blocks at `PreToolUse` and `UserPromptSubmit`. User-facing docs
-are in `README.md`; this file is the maintainer/agent context — the invariants and gotchas
-that aren't obvious from the code.
+supply-chain malware and blocks at `PreToolUse` and `UserPromptSubmit`. `README.md` holds
+the user-facing docs; this file holds the maintainer invariants that are not obvious from
+the code.
 
 ## Layout
 
-- `scripts/wormhook.sh` — the scanner. Reads a hook JSON payload on stdin, dispatches by
+- `scripts/wormhook.sh` — the engine. Reads a hook JSON payload on stdin, dispatches by
   `hook_event_name` + command class, runs Tiers 0–2, emits a verdict.
 - `scripts/malware-patterns.sh` — **single source of truth** for signatures, sourced by
-  the hook. Add a campaign here once and every tier picks it up. Extended-regex only
-  (must parse identically under bash and zsh).
-- `scripts/doctor/*.sh` — the SessionStart health dashboard: **one focused check per file**, each
-  its own SessionStart hook emitting **one** `🟢/🟡/🔴/⚪` light **every session** (issue #22,
-  supersedes the old monolithic silent-unless-degraded `doctor.sh`). Each file's header says what
-  it checks; the **design contract** lives in `scripts/doctor/CLAUDE.md` — read it before adding or
-  editing a check. `_utils.sh` is sourced by each (emit helpers + `wh_silenced` + `wormhook-const.sh`
-  load); it is sourced, not executed.
-- `scripts/wormhook-scan.sh` — the **out-of-band CLI** (+ `…conf.sample`). Drives the engine
-  from any shell for fleet checks, an hourly launchd sweep, and a global git hook. See
-  "Out-of-band adapters" below.
+  the engine. Extended-regex only (must parse identically under bash and zsh).
+- `scripts/doctor/*.sh` — SessionStart health checks, **one concern per file**. The design
+  contract (emission classes, jq rules) lives in `scripts/doctor/CLAUDE.md` — read it
+  before adding or editing a check. `_utils.sh` is sourced, never executed.
+- `scripts/wormhook-scan.sh` — the out-of-band CLI (+ `…conf.sample`): fleet scans, the
+  hourly launchd sweep, the global git hook.
 - `hooks/hooks.json` — event → script wiring. `.claude-plugin/{plugin,marketplace}.json` — manifests.
 
 ## Invariants (don't break these)
 
-- **Behavior PRs must bump `.claude-plugin/plugin.json`.** A CI tripwire fails the PR if
-  the version doesn't move forward on a behavioral change. README/comment-only changes
-  don't need it; anything touching the scripts does.
-- **The two `description` fields serve different roles — keep them different, do not sync them.**
-  `marketplace.json`'s is a short browse-list **tagline** (one line, what+why); `plugin.json`'s is
-  the **full install/inspect description — the campaign + IOC + blocking detail ONLY, not a feature
-  tour.** Someone reading it at `claude plugin inspect` is deciding whether to trust a plugin about
-  to scan their filesystem: list what it detects and blocks. Operational surfaces (the
-  `wormhook-scan` CLI, scheduled sweeps, git-hook/CI gate, the SessionStart dashboard) belong in the
-  README, **not** here — and do **not** try to link the README from this field: it renders as plain
-  text at inspect time, where a relative anchor does not resolve and the reader is not on the repo
-  page. A one-line prose "see the README for …" pointer is fine; a markdown link is dead text. The
-  plugin platform has no shared-field / `$ref` mechanism, so a byte-identical copy is just drift
-  waiting to happen — we deliberately gave each a distinct job instead, and there is **no parity
-  check**. Edit whichever fits the surface; do not mirror one into the other.
-- **The doctor checks follow the hybrid jq model (KEY-DECISION 2026-06-13, refined for the
-  0.10.0 split; supersedes the older fully-jq-free rule).** The *one* line the doctor must emit
-  without `jq` — `jq missing, scans are OFF` — is a hand-rolled static `printf` early-exit at
-  the top of **`doctor/deps.sh` only**, which **owns that alarm for the whole split**. That alarm
-  is the watchdog's whole reason to exist: if the check needed `jq`, it would go silent in the
-  exact case it exists to catch (the "silent for a month" invisible-failure bug). Every *other*
-  check inherits a single silent fail-open: `doctor/_utils.sh` runs `command -v jq || exit 0` at
-  source time, and sourcing a file that `exit`s exits the caller — so a jq-less machine silences
-  every non-deps check (deps.sh already shouted) with no per-file duplication. Everything past
-  the guard uses `jq --arg`: DRY output (real newlines, no literal-`\n`) and injection-safe
-  interpolation (why exposure can name the offending key files). **Because only `deps.sh` alarms,
-  a missing/corrupt `deps.sh` would silently disarm it — so a CI step (deriving the check list
-  from `hooks.json`) asserts every registered `doctor/*.sh` exists + is executable and `deps.sh`
-  is first, turning that corruption case into a red PR.** Rule: the jq-missing alarm is static + `deps.sh`-only;
-  every other line goes through `jq --arg`.
+- **Behavior PRs must bump `.claude-plugin/plugin.json`.** CI fails a PR that touches
+  `scripts/` or `hooks/` without a forward version move. Docs-only changes need no bump.
+- **The two `description` fields have different jobs — never sync them.**
+  `marketplace.json` carries a one-line browse tagline. `plugin.json` carries the full
+  install/inspect description: campaign + IOC + blocking detail ONLY — the reader is
+  deciding whether to trust a plugin about to scan their filesystem. Operational surfaces
+  (CLI, sweeps, CI gate, dashboard) belong in the README; a markdown link in the field
+  renders as dead text at inspect time (plain "see the README for …" prose is fine).
+  There is deliberately no parity check.
+- **Hybrid jq model.** The one line the doctor must emit without `jq` — `jq missing,
+  scans are OFF` — is a static `printf` at the top of `doctor/deps.sh` **only**, which
+  owns that alarm: if the check needed `jq` it would go silent in the exact case it
+  exists to catch. Every other check inherits a single silent fail-open — `doctor/_utils.sh`
+  runs `command -v jq || exit 0` at source time (sourcing a file that `exit`s exits the
+  caller). Everything past the guard uses `jq --arg` (real newlines, injection-safe). A CI
+  step (deriving the list from `hooks.json`) asserts every registered check exists + is
+  executable and `deps.sh` is first.
 - **`wormhook.sh` must route all scanned paths/commands through `jq --arg`.** It embeds
   untrusted filenames/commands into output; bare interpolation is an injection hole.
 - **Tier 0 always runs and is never cached.** A poisoned `~/.claude` hook re-runs every
-  launch, so persistence detection must outrank the Tier-2 deps-changed cache.
+  launch, so persistence detection outranks the Tier-2 deps-changed cache.
 - **Fail open, loud.** A missing signature file or a scan `timeout` degrades to 🟡 (and
   never refreshes the clean-scan cache) — it never bricks `npm`/`node` and never silently
-  passes as 🟢. The one tier with no `timeout` ceiling is Tier 1, the *blocking* tier: a
+  passes as 🟢. Exception: Tier 1, the *blocking* tier, has no `timeout` ceiling — a
   truncated walk there is a coverage hole, not an acceptable degradation.
 - **FP-tolerance scales with blast radius — route a noisy-but-real signature down a tier,
   do not drop it.** A block-tier match (PreToolUse / UserPromptSubmit) bricks a clean
-  `npm install` or a human turn and is un-workaroundable, so it demands a near-zero-FP,
-  evidence-backed signature. A `node_modules`/warn-tier match is a 🟡 you clear, so it
-  tolerates higher-FP behavioral patterns. So the behavioral heuristics (`/dev/tcp/`,
-  decode-then-eval) live in the `node_modules` tier, not the project-source block — see
-  `malware-patterns.sh` and README's "deliberately doesn't do". A missed detection is worse
-  than a cleared warning: when a real signature is too noisy for the block tier, move it to
-  a lower-blast tier rather than discard it.
+  `npm install` or a human turn, so it demands a near-zero-FP, evidence-backed signature.
+  A `node_modules`/warn-tier match is a 🟡 you clear, so the behavioral heuristics
+  (`/dev/tcp/`, decode-then-eval) live there, never in the project-source block.
 - **Quarantine is opt-in, exact-match-only, and reversible.** `WORMHOOK_QUARANTINE=1`
-  (engine env; CLI `--quarantine` / `install-launchd --quarantine` just export it) renames a
-  Tier-0 artifact to `<path>.wormhook-quarantined.<epoch>` + `chmod 000` and logs to the
-  cache dir. Eligible: the `WORMHOOK_PERSIST_*` table hits, known-bad `.pth` name/hash,
-  known-bad `.abi3.so` basenames — **never** a behavioral match (same FP-tolerance rule as
-  the block tier: an unattended rename demands exact-match confidence). Never kill/unload/
-  delete (forensics + fail-open bias); a failed rename degrades to the advisory alert.
-  Default off on every surface — do not promote it to default-on.
+  (engine env; CLI `--quarantine` just exports it) renames a Tier-0 artifact to
+  `<path>.wormhook-quarantined.<epoch>` + `chmod 000` and logs to the cache dir.
+  Eligible: the `WORMHOOK_PERSIST_*` table, known-bad `.pth` name/hash, known-bad
+  `.abi3.so` basenames — **never** a behavioral match (an unattended rename demands
+  exact-match confidence). Never kill/unload/delete; a failed rename degrades to the
+  advisory alert. Default off on every surface.
 - **The integrity manifest must move with the engine.** `scripts/integrity.sha256` holds
   the SHA-256 of `wormhook.sh` + `malware-patterns.sh`; `doctor/integrity.sh` verifies it
-  every SessionStart (issue #61 — one appended `exit 0` must not keep the dashboard green).
-  Editing either file ⇒ regenerate: `(cd scripts && shasum -a 256 wormhook.sh
-  malware-patterns.sh > integrity.sha256)` — CI fails on a stale manifest. The tamper 🔴 is
-  NOT silenceable (same class as the jq alarm).
-- **No network calls — ever.** Every tier is local (stat/grep/jq over the filesystem). The
-  install-time registry-firewall job (malicious-version blocking, typosquats, publish-age/
-  reputation) is **ceded to Socket Firewall (`sfw`) + `safedep/vet`**; `doctor/firewall.sh`
-  nudges the user to install them. If you're tempted to add a registry lookup (e.g. a publish-age
-  "cooldown"), that belongs in `sfw`/`vet`, not here — independence and zero-network are the
-  design bet, and a hook can't transparently route an install through a firewall anyway (it
-  can only allow/deny). See README "deliberately doesn't do".
+  every SessionStart. Editing either file ⇒ regenerate: `(cd scripts && shasum -a 256
+  wormhook.sh malware-patterns.sh > integrity.sha256)` — CI fails on a stale manifest.
+  The tamper 🔴 is NOT silenceable (same class as the jq alarm).
+- **No network calls — ever.** Every tier is local (stat/grep/jq over the filesystem).
+  Registry intelligence (malicious-version blocking, typosquats, publish-age) is ceded to
+  Socket Firewall (`sfw`) + `safedep/vet`; `doctor/firewall.sh` nudges the user to install
+  them. A tempting registry lookup belongs in `sfw`/`vet`, not here.
+- **Signature currency is tracked.** `WORMHOOK_SIGNATURES_ASOF` in `malware-patterns.sh`
+  is the date the corpus was last verified against advisories; `doctor/sigage.sh` nags
+  past `WORMHOOK_SIGAGE_MAX_DAYS` (default 60). Bump it on every `/update` pass — also
+  when a sweep lands nothing new.
 
 ## Dispatch model
 
-`wormhook.sh` decides *which tiers run* and *whether it can block* from two inputs:
-`EVENT` (`hook_event_name`) and the command, matched against `GATE_RE` / `INSTALL_RE` /
-`GIT_RE` / `PYGATE_RE` / `PYINSTALL_RE`. **The regexes match per SUBCOMMAND, not against the
-raw string** (issue #56): the command is split at `;`/`&&`/`||`/`|`, and leading `VAR=value`
-assignments plus a bare `env` prefix are stripped from each segment — mirroring the harness's
-own `if` matching, so `cd sub && npm install` and `CI=1 npm install` gate. `^\s*` in a class
-regex anchors a *segment* start. Dir-option pairs (`--prefix`/`--cwd`/`--dir`/`-C` + value)
-are deleted from the matching copy so `npm --prefix X install` still matches `INSTALL_RE`.
-The engine scans `~/.claude`, `$CWD`, **and every target dir the command operates on**
-(issue #57): a `cd` is tracked through the segments and `--prefix`/`--cwd`/`--dir`/`-C` are
-honoured, so Tier 0's agent-config sweep and every Tier-1 check run per target dir — the
-lifecycle gate additionally walks each target's **workspace manifests** (`package.json`
-`workspaces` + `pnpm-workspace.yaml`), since a root install runs every workspace's lifecycle.
-Tier 2 and its scan cache stay `$CWD`-rooted (the launchd sweep / per-repo sessions cover
-other trees). **Two events can hard-block:** `PreToolUse`
-(`hookSpecificOutput.permissionDecision:"deny"`) and `UserPromptSubmit` (**top-level**
-`decision:"block"`). `SessionStart`/`PostToolUse` run after the point of no return and only warn.
+`wormhook.sh` picks tiers and block-ability from `EVENT` (`hook_event_name`) + the
+command, matched against `GATE_RE`/`INSTALL_RE`/`GIT_RE`/`PYGATE_RE`/`PYINSTALL_RE`.
+**The regexes match per SUBCOMMAND, not the raw string**: the command splits at
+`;`/`&&`/`||`/`|`, leading `VAR=value` assignments and a bare `env` prefix are stripped,
+and dir-option pairs (`--prefix`/`--cwd`/`--dir`/`-C` + value) are deleted from the
+matching copy — so `cd sub && npm install`, `CI=1 npm install`, and
+`npm --prefix X install` all gate. `^\s*` anchors a *segment* start. The engine scans
+`~/.claude`, `$CWD`, **and every target dir the command operates on** (a `cd` is tracked
+through segments; the dir options are honoured); the lifecycle gate also walks each
+target's workspace manifests (`package.json` `workspaces` + `pnpm-workspace.yaml`), since
+a root install runs every workspace's lifecycle. Tier 2 and its cache stay `$CWD`-rooted.
+
+**Two events can hard-block:** `PreToolUse` (`hookSpecificOutput.permissionDecision:
+"deny"`) and `UserPromptSubmit` (**top-level** `decision:"block"`).
+`SessionStart`/`PostToolUse` run after the point of no return and only warn.
 
 - `GIT_RE` (pull/merge/checkout/switch/rebase) is **PostToolUse-only** — pre-op the new
-  files don't exist yet, so a pre-scan is pure cost.
-- `PYGATE_RE` (pip/pip3/pipx/uv/python/python3) is **PreToolUse** → T0+T1 only. The point is
-  to run the Tier-0 `.pth` sweep *before* the interpreter auto-executes a poisoned
-  site-packages startup hook. **Never T2** (node_modules irrelevant). `PYINSTALL_RE` is the PostToolUse
-  subset (a fresh `.pth` can land) → T0+T1 re-scan. `make`/`./` are deliberately *not* gated:
-  too broad, no matching signatures, pure FP/latency tax — gate only where coverage exists.
-- `UserPromptSubmit` is the **continuous monitor**: T0+T1 only (the fast-changing tiers),
-  **never T2**, fires every human turn, and *can block*. It carries no command (`COMMAND=""`),
-  so the `${COMMAND:+…}` alert interpolations omit cleanly. It is **silent-on-clean** — the
-  always-on 🟢 status line is suppressed for `MODE=prompt_submit` (a 🟢 every prompt spams the
-  transcript); it speaks only on a finding (🚨 block) or degradation (🟡). The 🟡 path is NOT
-  suppressed — a silently-degraded continuous monitor is the invisibility bug all over again.
+  files don't exist yet.
+- `PYGATE_RE` (pip/pip3/pipx/uv/python/python3) is **PreToolUse** → T0+T1 only, **never
+  T2**: the Tier-0 `.pth` sweep must run *before* the interpreter auto-executes a
+  poisoned site-packages startup hook. `PYINSTALL_RE` is the PostToolUse subset (a fresh
+  `.pth` can land) → T0+T1 re-scan. `make`/`./` stay ungated: no matching signatures,
+  pure FP/latency tax.
+- `UserPromptSubmit` is the **continuous monitor**: T0+T1 only, **never T2**, fires every
+  human turn, and *can block*. It carries no command (`COMMAND=""`, so the `${COMMAND:+…}`
+  interpolations omit cleanly). It is **silent-on-clean** (the 🟢 is suppressed for
+  `MODE=prompt_submit`); the 🟡 path is NOT suppressed — a silently-degraded monitor is
+  an invisible failure.
 - **`alert()` emits three non-interchangeable shapes** keyed on `MODE`: `pre_tool` nests
-  `permissionDecision`/`permissionDecisionReason` under `hookSpecificOutput`; `prompt_submit`
-  uses **top-level** `decision:"block"` + `reason` (model) + `systemMessage` (user) — on UPS
-  `decision` is **mutually exclusive** with `hookSpecificOutput.additionalContext`, so neither
-  is emitted; `session_start`/`post_tool` accumulate and emit `systemMessage` + `additionalContext`.
+  `permissionDecision`/`permissionDecisionReason` under `hookSpecificOutput`;
+  `prompt_submit` uses **top-level** `decision:"block"` + `reason` (model) +
+  `systemMessage` (user) — on UPS `decision` is **mutually exclusive** with
+  `hookSpecificOutput.additionalContext`, so neither is emitted; `session_start`/
+  `post_tool` accumulate and emit `systemMessage` + `additionalContext`.
 
 ### Two sources of truth — keep them in sync (`if` ⊇ regex)
 
 "Which commands trigger a scan" is encoded twice: the `if` globs in `hooks/hooks.json`
-and the `GATE_RE`/`INSTALL_RE`/`GIT_RE` regexes in `wormhook.sh`. They're **not**
-duplicates — the `if` glob is a *coarse perf pre-filter* (its only job is to not spawn
-bash on every `ls`/`git status`), and the regex is the *precise gate*. The invariant is
-**`if` ⊇ regex**, not equality: `if` broader than the regex is free (a wasted spawn that
-exits 0); `if` **narrower** is the bug — the hook silently never fires and the scan is
-skipped with no signal. JSON can't hold a comment, so the canonical statement lives at
-the regex block in `wormhook.sh`; this is the mirror. (Don't drop the `if` to "DRY" it to
-one source — that spawns the script on every command; the latency tax isn't worth it.)
+(a coarse perf pre-filter — its only job is to not spawn bash on every `ls`) and the
+regexes in `wormhook.sh` (the precise gate). The invariant is **`if` ⊇ regex**: `if`
+broader than the regex is a free wasted spawn; `if` **narrower** means the hook silently
+never fires. The canonical statement lives at the regex block in `wormhook.sh`; CI
+asserts the superset. Don't collapse the `if` away to "DRY" it — that spawns the script
+on every command.
 
-**`UserPromptSubmit` is exempt** from `if ⊇ regex`: a UPS payload carries no command, so its
-`hooks.json` entry has **no `if` and no matcher** — it fires every prompt by design, and the
-script gates it purely on `EVENT`. There's no command-class regex to keep it in sync with.
+**`UserPromptSubmit` is exempt**: its payload carries no command, so its entry has no
+`if` and no matcher — it fires every prompt and the script gates on `EVENT` alone.
 
-**One hook object per event — never split into sibling entries (KEY-DECISION 2026-06-14).**
-Each event (`PreToolUse`/`PostToolUse`) registers **exactly one** hook object whose `if` is the
-*union* of every gated command class. Do **not** break it into one-object-per-class — sibling
-objects under the same `matcher` each fire independently (no cross-entry dedup), and Claude
-Code's `if` filter is **best-effort and fails open**: a compound/piped command it can't parse
-(`npm i | grep … ; npx … && echo`) bypasses every `if` and runs *all* siblings. Three
-PostToolUse objects → three duplicate scans + three 🟢 lines on one command (the N× bug fixed
-in 0.11.0). The single unioned object means fail-open can fire it at most once; `wormhook.sh`
-then re-derives the precise class internally to pick tiers. The `if ⊇ regex` invariant holds
-on the unioned glob: PostToolUse's `if` covers `INSTALL_RE ∪ GIT_RE ∪ PYINSTALL_RE`.
+**One hook object per event — never split into sibling entries.** Each of
+`PreToolUse`/`PostToolUse` registers **exactly one** hook object whose `if` is the union
+of every gated command class. Sibling objects under one `matcher` fire independently (no
+cross-entry dedup), and the `if` filter is best-effort and **fails open** on a compound
+command it can't parse — N siblings → N duplicate scans. The single unioned object caps
+fail-open at one spawn; `wormhook.sh` re-derives the precise class internally.
 
 ## Out-of-band adapters (`wormhook-scan.sh`)
 
-The Claude hook is **one trigger, not the engine**. `wormhook-scan.sh` adds the non-Claude
-triggers (manual fleet `scan`, hourly launchd sweep, global git hook, opt-in shell exec-guard,
-and the **GitHub Action** in `action.yml`; verbs `scan`/`check`/`git-hook`/`shell-init`/`install-*`/`status`/`config`). The user-facing
-installer is the `/wormhook-setup` slash command (`commands/wormhook-setup.md`), which the
-`SessionStart` `doctor/coverage.sh` light points at. Each doctor check emits its own status
-light; a soft nudge is silenceable via `WORMHOOK_SKIP_{RG,SFW,VET,COVERAGE,CICD,DRIFT}=1` (or
-`WORMHOOK_DOCTOR_QUIET=1` for all), set in repo/user `settings.json` `env` — a silenced nudge
-degrades to ⚪, never to actual silence. The jq "scans are OFF" 🔴 (in `doctor/deps.sh`) and
-the tamper 🔴 (in `doctor/integrity.sh`) are intentionally **not** silenceable. These
-invariants hold:
+The Claude hook is **one trigger, not the engine**. `wormhook-scan.sh` adds the rest
+(verbs `scan`/`check`/`git-hook`/`shell-init`/`install-*`/`status`/`config`), plus the
+GitHub Action in `action.yml`. The user-facing installer is `/wormhook-setup`
+(`commands/wormhook-setup.md`). Doctor soft nudges are silenceable via
+`WORMHOOK_SKIP_{RG,SFW,VET,COVERAGE,CICD,DRIFT,SHELLGUARD,SIGAGE}=1` (or
+`WORMHOOK_DOCTOR_QUIET=1` for all), set in settings.json `env` — a silenced nudge
+degrades to ⚪, never to actual silence. The jq 🔴 (`doctor/deps.sh`) and the tamper 🔴
+(`doctor/integrity.sh`) are **not** silenceable.
 
-- **Adapters never duplicate detection.** Every verb drives the *unchanged* `wormhook.sh` by
-  synthesizing the same stdin payload Claude sends — `SessionStart` for fast (T0+T1, T2 on
-  cache-miss), `PostToolUse`+`npm install` for `--deep` (forces T2). All signatures live in
-  `malware-patterns.sh`; the CLI's only added logic is *orchestration* (repo discovery, the
-  global-persistence dedup, exit codes). If you are tempted to add a pattern/grep to the CLI,
-  it belongs in `malware-patterns.sh` instead — same DRY rule as the tiers.
+- **Adapters never duplicate detection.** Every verb drives the *unchanged* `wormhook.sh`
+  by synthesizing the same stdin payload Claude sends — `SessionStart` for fast,
+  `PostToolUse`+`npm install` for `--deep` (forces T2). A new pattern/grep belongs in
+  `malware-patterns.sh`, never in the CLI.
 - **Same injection rule as the engine.** Paths reach the engine only through `jq -n --arg`
-  payloads; nothing untrusted is string-interpolated (mirrors the `wormhook.sh` `jq --arg`
-  invariant). The launchd plist escapes every value via `_xml`.
-- **The git hook must never self-flag.** Its body calls only the local CLI — no `curl|…|sh`,
-  no `MALWARE_DROPPER_TOKENS_RE` strings — so the engine's MALICIOUS-GIT-HOOK Tier-0 check
-  does not trip on it. Verified by `tests/run.sh` (it runs the real `install-git-hook` body
-  through the Tier-0 scan and asserts a clean verdict); keep the hook body clean if you touch `_hook_block`.
+  payloads; the launchd plist escapes every value via `_xml`.
+- **The git hook must never self-flag.** Its body calls only the local CLI — no
+  `curl|…|sh`, no `MALWARE_DROPPER_TOKENS_RE` strings. `tests/run.sh` runs the real
+  `install-git-hook` body through the Tier-0 scan and asserts a clean verdict; keep the
+  body clean if you touch `_hook_block`.
 - **Installers are opt-in, idempotent, non-clobbering, reversible.** `install-git-hook`
-  cooperates with an existing `core.hooksPath` and appends a `# >>> wormhook >>>` marker block
-  to a pre-existing hook (never overwrites); `uninstall-git-hook` removes only that block.
-  launchd label is `com.notambourine.wormhook-sweep` (org-namespaced; not in any IOC set).
+  cooperates with an existing `core.hooksPath` and appends a `# >>> wormhook >>>` marker
+  block to a pre-existing hook (never overwrites); `uninstall-git-hook` removes only that
+  block. launchd label: `com.notambourine.wormhook-sweep` (org-namespaced; in no IOC set).
 - **Discovery, not glob-literal.** A scan path resolves to the git repo(s) at/under it
-  (`node_modules` pruned); a `node_modules`/`dist` dir is never scanned *as a project* (the
-  engine's `!node_modules` exclusion can't fire when that dir is the CWD root). `--literal`
-  bypasses discovery for an arbitrary dir.
-- **Config is per-machine, never hardcoded** (team-distributable): roots come from
-  `$WORMHOOK_SCAN_ROOTS` or `${XDG_CONFIG_HOME:-~/.config}/wormhook/scan-roots`; the in-repo
-  `wormhook-scan.conf.sample` is the seed for `config --init`.
-- **Exec-guard layering = git hook *warns*, shell-init *blocks*.** The git hook is a post-op
-  reporter (loud, human-in-the-loop — it cannot block files that already landed). `shell-init`
-  is the opt-in enforcement: the out-of-Claude analog of the `PreToolUse` block. It is scoped
-  to the JS package managers (`npm/pnpm/yarn/bun/npx`) **deliberately not `node`** (too hot a
-  path — latency + version-manager breakage), is `command`-based so it never self-recurses,
-  fails open if the CLI is absent, and must be loaded **after** nvm/asdf (it defines shell
-  functions). Do not promote it from opt-in to auto-installed, and do not add `node`.
-- **`action.yml` is the github.com PR-gate trigger — a thin `check`-verb wrapper, not an engine.**
-  It shells `wormhook-scan.sh check` from `$GITHUB_ACTION_PATH` (the consuming repo's checkout is
-  the scan target) and maps the `0/1/2` exit contract to job pass/fail; **no detection logic, no
-  signatures, no network** (same DRY/zero-network rule as every adapter). It gates the **merge**,
-  not the push: github.com has no `pre-receive` hook (GHE Server only), so the intended posture is
-  *required status check + a ruleset that blocks force pushes*. Its embedded `run:` shell is **not**
-  covered by the `scripts/*.sh` shellcheck glob — `actionlint` rejects an action-metadata file as a
-  "workflow", so lint it by extracting `.runs.steps[].run` and piping through `shellcheck` (see the
-  PR that added it). Editing `action.yml` is a behavior change → **bump `plugin.json`**.
-- Editing `wormhook-scan.sh` (or `commands/wormhook-setup.md`) is a behavior change →
-  **bump `plugin.json`** (CI tripwire) and `wormhook-scan.sh` is covered by the
-  `shellcheck scripts/*.sh scripts/doctor/*.sh` step.
+  (`node_modules` pruned); a `node_modules`/`dist` dir is never scanned *as a project*.
+  `--literal` bypasses discovery.
+- **Config is per-machine, never hardcoded**: roots from `$WORMHOOK_SCAN_ROOTS` or
+  `${XDG_CONFIG_HOME:-~/.config}/wormhook/scan-roots`; `wormhook-scan.conf.sample` seeds
+  `config --init`.
+- **Exec-guard layering = git hook *warns*, shell-init *blocks*.** `shell-init` is the
+  out-of-Claude analog of the `PreToolUse` block: scoped to `npm/pnpm/yarn/bun/npx`,
+  **deliberately not `node`** (too hot a path; version-manager breakage), `command`-based
+  so it never self-recurses, fails open if the CLI is absent, and loads **after**
+  nvm/asdf. Keep it opt-in; do not add `node`.
+- **`action.yml` is a thin `check`-verb wrapper** mapping the `0/1/2` exit contract to
+  job pass/fail — no detection logic, no signatures, no network. It gates the **merge**
+  (required status check + a force-push-blocking ruleset), not the push — github.com has
+  no `pre-receive`. Its embedded `run:` shell is not covered by the `scripts/*.sh`
+  shellcheck glob and `actionlint` rejects action-metadata files — lint it by extracting
+  `.runs.steps[].run` into `shellcheck`.
+- Editing `wormhook-scan.sh`, `action.yml`, or `commands/wormhook-setup.md` is a behavior
+  change → bump `plugin.json`.
 
 ## Working here
 
-- After editing scripts: syntax-check with the **real shebang shell** (Apple `/bin/bash` is
-  3.2.57), and lint. `bash -n` only parses its **first** file arg — loop, don't glob, and the
-  `scripts/*.sh` glob does **not** recurse, so list the `doctor/` subdir explicitly:
+- After editing scripts: syntax-check with the **real shebang shell** (Apple `/bin/bash`
+  is 3.2.57 — a Homebrew bash passes files 3.2 rejects) and lint. `bash -n` parses only
+  its **first** file arg, and `scripts/*.sh` does not recurse:
   `for f in scripts/*.sh scripts/doctor/*.sh; do /bin/bash -n "$f"; done` then
-  `shellcheck scripts/*.sh scripts/doctor/*.sh` (CI uses the default floor — stricter than
-  `-S warning`). (A Homebrew bash on `$PATH` will pass files that 3.2 rejects — always check
-  with `/bin/bash`.)
-- **bash 3.2 gotcha in `$(…)`:** its command-substitution parser miscounts a lone `'`
-  (apostrophe) even inside a heredoc body, swallowing the closing `)`. So **no contractions**
-  ("it's", "don't") in any `alert "..." "$(cat <<BODY … BODY)"` body — write "it has"/"do not".
-  `bash -n` under a newer bash won't catch it; only `/bin/bash` will.
+  `shellcheck scripts/*.sh scripts/doctor/*.sh` (CI uses the default floor).
+- **bash 3.2 gotcha in `$(…)`:** its parser miscounts a lone `'` (apostrophe) even inside
+  a heredoc body, swallowing the closing `)`. So **no contractions** in any
+  `alert "..." "$(cat <<BODY … BODY)"` body — write "it has"/"do not". Only `/bin/bash -n`
+  catches it.
 - After editing `hooks.json`/manifests: `jq -e . hooks/hooks.json .claude-plugin/*.json`.
 - Smoke-test a path by piping a synthetic payload:
   `echo '{"tool_input":{"command":"git pull"},"cwd":"/tmp/x","hook_event_name":"PostToolUse"}' | bash scripts/wormhook.sh`
-- New campaign → add patterns to `malware-patterns.sh`, update the provenance header in
-  `wormhook.sh`, add the Source to `README.md`, bump `plugin.json`.
-- Any edit to `wormhook.sh` or `malware-patterns.sh` → regenerate `scripts/integrity.sha256`
-  (see Invariants) or CI goes red.
-- New **command class** (a new gated verb) → update **both** the regex in `wormhook.sh`
-  *and* the matching `if` glob in `hooks/hooks.json`, keeping `if` ⊇ regex (see above).
+- New campaign → follow the `/update` skill (`.claude/skills/update/SKILL.md`): patterns
+  to `malware-patterns.sh`, provenance header in `wormhook.sh`, Source in `README.md`,
+  bump `plugin.json`, bump `WORMHOOK_SIGNATURES_ASOF`.
+- Any edit to `wormhook.sh` or `malware-patterns.sh` → regenerate
+  `scripts/integrity.sha256` (see Invariants) or CI goes red.
+- New command class (a new gated verb) → update **both** the regex in `wormhook.sh` and
+  the `if` glob in `hooks/hooks.json`, keeping `if` ⊇ regex.

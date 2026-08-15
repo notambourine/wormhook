@@ -14,7 +14,7 @@
 # multi-line function bodies, so it can MISS a clobber but never cries wolf on a correct setup
 # (the composed block's PM functions call __sc_run, not sfw, so they do not match).
 #   🟡 clobber: exec-guard + a bare `sfw` PM wrapper coexist -> compose them (/wormhook-setup).
-#   🟢 exec-guard wired, no clobber.   ⚪ not wired (opt-in), no rc files, or silenced.
+#   ⚪ clobber but silenced.  silent: no clobber, guard not wired (opt-in), or no rc files.
 set -uo pipefail
 
 # shellcheck source=scripts/doctor/_utils.sh disable=SC1091
@@ -25,17 +25,13 @@ for f in "$HOME/.zshrc" "$HOME/.zshenv" "$HOME/.bashrc" "$HOME/.bash_profile" "$
   [[ -f "$f" ]] && rc_files+=("$f")
 done
 
-if (( ${#rc_files[@]} == 0 )); then
-  wh_flag ⚪ shellguard "no shell rc files found — exec-guard status unknown"
-  exit 0
-fi
+# No rc files, or the opt-in guard not wired => n/a => silent (advisory check —
+# doctor/CLAUDE.md; /wormhook-setup and the README carry the adoption pitch, not a light).
+(( ${#rc_files[@]} == 0 )) && exit 0
 
 # Is the opt-in exec-guard wired at all? (Both the standalone eval line and the composed block
 # carry `wormhook-scan shell-init`.) grep -l is portable to BSD (macOS) and GNU grep.
-if ! grep -lE 'wormhook-scan[[:space:]]+shell-init' "${rc_files[@]}" >/dev/null 2>&1; then
-  wh_flag ⚪ shellguard "shell exec-guard not wired (opt-in: eval \"\$(wormhook-scan shell-init)\")"
-  exit 0
-fi
+grep -lE 'wormhook-scan[[:space:]]+shell-init' "${rc_files[@]}" >/dev/null 2>&1 || exit 0
 
 # Guard is wired. Clobber anti-pattern = a package-manager function whose body calls `sfw`
 # DIRECTLY (e.g. `npm() { sfw npm "$@"; }`). The composed block's PM functions call `__sc_run`
@@ -54,5 +50,4 @@ if [[ -n "$clobber" ]]; then
   exit 0
 fi
 
-wh_flag 🟢 shellguard "shell exec-guard wired, no wrapper clobber"
-exit 0
+exit 0   # guard wired, no clobber => silent (no green line — doctor/CLAUDE.md)

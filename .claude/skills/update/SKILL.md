@@ -86,6 +86,9 @@ traces to a real advisory):
 A behavioral change (anything touching the scripts) **must**:
 
 - bump `version` in `.claude-plugin/plugin.json` (a CI tripwire fails the PR otherwise)
+- set `WORMHOOK_SIGNATURES_ASOF` in `scripts/malware-patterns.sh` to today — also when a
+  sweep lands *nothing* new (the constant means "verified current as of", and the
+  `doctor/sigage.sh` light nags when it ages out)
 - if the new campaign should appear in the **full** install/inspect description, update
   `.claude-plugin/plugin.json`'s `description`. The marketplace **tagline**
   (`.claude-plugin/marketplace.json`) is short and role-distinct — only touch it if the

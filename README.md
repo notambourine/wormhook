@@ -28,7 +28,7 @@ Built and maintained by [NoTambourine](https://notambourine.com).
 
 ```bash
 claude plugin marketplace add notambourine/wormhook
-claude plugin install wormhook@notambourine --scope user
+claude plugin install wormhook@wormhook --scope user
 ```
 
 Requires `jq` and `bash`. [`ripgrep`](https://github.com/BurntSushi/ripgrep) is

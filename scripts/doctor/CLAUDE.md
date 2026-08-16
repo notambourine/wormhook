@@ -1,7 +1,7 @@
 # scripts/doctor/ — SessionStart status-light contract
 
 Each file here is ONE focused health check, registered as its own `SessionStart` hook in
-`hooks/hooks.json`, emitting at most ONE `🟢/🟡/🔴/⚪` status light. This file is the design
+`hooks/hooks.json`, emitting at most ONE `🟡/🔴/⚪` status light. This file is the design
 contract. The authoritative hybrid-jq invariant stays in the root `CLAUDE.md`; this file
 does not duplicate it.
 
@@ -33,16 +33,15 @@ does not duplicate it.
   ⚪ when the guard is not wired (opt-in), and never asserts correctness it cannot verify. The
   *how-to-compose* guidance still lives in `README.md` + `/wormhook-setup`, not the light.
 
-- **Two emission classes: alarms are always-on, advisory checks speak only on a finding.**
-  The two ALARM checks — `deps.sh` (jq) and `integrity.sh` (tamper) — emit their light every
-  session, green included: for an alarm, ran-and-fine vs never-ran must never be ambiguous,
-  and their two green lines double as proof the doctor hook chain runs. Every other check is
-  ADVISORY: it emits only a finding (🟡/🔴) or a silenced finding (⚪); healthy and
-  not-applicable states are silent. A missed nudge costs nothing, the CI presence-assert
-  covers the never-ran case at PR time, and a row of green nudge lights every session was
-  pure transcript noise. A consciously-declined nudge degrades to ⚪ via
-  `WORMHOOK_SKIP_<ITEM>=1` (or `WORMHOOK_DOCTOR_QUIET=1` for all), never to actual silence
-  — silencing hides the nag, not the fact that something was silenced.
+- **Every check speaks only on a finding — no check emits a 🟢.** A check emits a finding
+  (🟡/🔴) or a silenced finding (⚪); healthy and not-applicable states are silent. That
+  includes the two ALARM checks, `deps.sh` (jq) and `integrity.sh` (tamper): their findings
+  are the loudest lines the doctor has and are NOT silenceable, but their healthy state is
+  as quiet as any nudge's. The CI presence-assert (derived from `hooks.json`) covers the
+  never-ran case at PR time, so a green line is not needed as proof the chain ran, and a row
+  of green lights every session is pure transcript noise. A consciously-declined nudge
+  degrades to ⚪ via `WORMHOOK_SKIP_<ITEM>=1` (or `WORMHOOK_DOCTOR_QUIET=1` for all), never
+  to actual silence — silencing hides the nag, not the fact that something was silenced.
 
 - **`deps.sh` owns the jq-missing 🔴 and is registered FIRST.** It raises the static `printf`
   "scans are OFF" alarm *before* sourcing `_utils.sh`; every other check inherits `_utils.sh`'s
@@ -57,8 +56,8 @@ does not duplicate it.
 ## Adding a check
 
 1. New `doctor/<concern>.sh` — confirm the concern has an observable state first (rule 2); `chmod +x`.
-2. Source `_utils.sh`; emit at most one `wh_flag <emoji> <concern> "<msg>" ["<ctx>"]`. A new
-   check is advisory unless it is a genuine alarm: silent when healthy/n-a, one line on a finding.
+2. Source `_utils.sh`; emit at most one `wh_flag <emoji> <concern> "<msg>" ["<ctx>"]` — silent
+   when healthy or not applicable, one line on a finding.
 3. Register it as its own `SessionStart` hook in `hooks/hooks.json` — CI derives the presence-assert
    from there, so there is no list or count to update.
 4. Behavior change → bump `.claude-plugin/plugin.json`.

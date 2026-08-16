@@ -1,12 +1,10 @@
 #!/bin/bash
 # wormhook-scan — run the wormhook engine OUTSIDE Claude Code.
 #
-# wormhook.sh fires only on Claude hook events; this CLI is the out-of-band surface
-# (morning/manual fleet checks, an hourly launchd sweep, a global git hook) so the same
-# detection covers `git pull` in a plain terminal and "came back to the machine after a
-# while". Every verb is a THIN ADAPTER over the UNCHANGED engine: it synthesizes the same
-# stdin payload Claude would send and parses the same verdict. NO detection logic lives
-# here — wormhook.sh + malware-patterns.sh stay the single source of truth.
+# wormhook.sh fires only on Claude hook events; this CLI covers the rest — manual fleet
+# checks, an hourly launchd sweep, a global git hook. Every verb is a THIN ADAPTER over the
+# UNCHANGED engine: it synthesizes the payload Claude would send and parses the same verdict.
+# NO detection logic here — wormhook.sh + malware-patterns.sh stay the single source of truth.
 #
 #   fast (default): {"cwd":DIR,"hook_event_name":"SessionStart"}            => T0+T1 (+T2 on cache-miss)
 #   --deep:         {...,"PostToolUse",tool_input.command:"npm install"}    => forces T2
@@ -21,8 +19,7 @@ set -uo pipefail
 
 command -v jq >/dev/null 2>&1 || { echo "wormhook-scan: jq required (brew install jq)" >&2; exit 1; }
 
-# ── Resolve our own real path through any symlink (e.g. ~/.local/bin/wormhook-scan) so we
-#    can find the sibling engine, whether installed from the marketplace clone or a checkout.
+# Resolve through any symlink (~/.local/bin/wormhook-scan) to find the sibling engine.
 SOURCE="${BASH_SOURCE[0]}"
 while [[ -h "$SOURCE" ]]; do
   _dir="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
@@ -40,17 +37,14 @@ _die() { echo "wormhook-scan: $1" >&2; exit "${2:-1}"; }
 . "$SCRIPT_DIR/wormhook-const.sh" 2>/dev/null || _die "constants not found ($SCRIPT_DIR/wormhook-const.sh)"
 LABEL="$WORMHOOK_LAUNCHD_LABEL"
 
-# Verdict exit codes — the single source for the 0/1/2 convention in cmd_help and every
-# scan/check/git-hook return (and the shell-init guard keys on EXIT_CRIT=1).
+# Single source for the 0/1/2 convention every verb returns and the shell-init guard keys on.
 readonly EXIT_OK=0 EXIT_CRIT=1 EXIT_DEGRADED=2
 
 CONFIG="${WORMHOOK_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/wormhook/scan-roots}"
 SAMPLE="$SCRIPT_DIR/wormhook-scan.conf.sample"
 SWEEP_LOG="${WORMHOOK_LOG:-$HOME/Library/Logs/wormhook-sweep.log}"
 
-# ── Engine driver ──────────────────────────────────────────────────────────────
-# Echoes the engine's single JSON verdict for one directory. Payload built with jq
-# --arg so a path with spaces/quotes cannot break out (same rule the engine follows).
+# Payload built with jq --arg, so a path with spaces or quotes cannot break out.
 _scan_one() {  # $1=dir  $2=fast|deep
   local dir="$1" mode="$2" payload
   if [[ "$mode" == deep ]]; then
@@ -60,12 +54,9 @@ _scan_one() {  # $1=dir  $2=fast|deep
   fi
   printf '%s' "$payload" | bash "$ENGINE" 2>/dev/null
 }
-_glyph() {  # stdin: engine JSON -> 🟢/🟡/🚨 from the machine-readable `verdict`. The engine and
-            # this CLI ship in one install (ENGINE is the sibling wormhook.sh) and cannot
-            # version-drift, so the structured `verdict` is the sole contract — no systemMessage
-            # glyph-prefix scrape. A missing/unrecognized verdict resolves to 🟡 (the one real
-            # no-verdict path, signatures-unavailable, is already a degraded state) — degraded,
-            # never silently green.
+# Engine and CLI ship in one install and cannot version-drift, so the structured `verdict` is
+# the sole contract. An unrecognized verdict resolves to 🟡 — degraded, never silently green.
+_glyph() {  # stdin: engine JSON -> 🟢/🟡/🚨
   local g
   g=$(jq -r '
     (.verdict // "") as $v
@@ -75,25 +66,18 @@ _glyph() {  # stdin: engine JSON -> 🟢/🟡/🚨 from the machine-readable `ve
       else "🟡" end' 2>/dev/null)
   case "$g" in "🚨"|"🟡"|"🟢") printf '%s' "$g" ;; *) printf '🟡' ;; esac
 }
-# Alert TITLEs from a verdict (one per line) from the structured `findings` array — clean strings
-# (no globs) => safe for set membership. Empty when there are no findings (every non-red verdict;
-# red always carries findings). Same single-install contract as _glyph: no additionalContext-banner
-# scrape fallback, because there is no drifted engine to fall back for.
-_titles() {  # finding titles, one per line, from .findings[].title
+# Titles are clean strings (no globs), so they are safe for set membership.
+_titles() {  # finding titles, one per line
   jq -r '(.findings // []) | .[] | .title' 2>/dev/null
 }
-# Per-finding identity keys (one base64 token per line) for the global-vs-local dedup.
-# Keyed on the FULL {title,body} — the body carries the matched path — NOT the class-level
-# title, so a real per-repo finding is never masked by a same-titled global finding (e.g. a
-# poisoned global core.hooksPath would otherwise collapse an identically-titled local
-# .git/hooks finding to 🟢). base64 keeps a multi-line body as a single grep -Fx token.
-# Empty for older engine output (no .findings) => every finding treated local (safe: never masks).
+
+# Keyed on the FULL {title,body}, because the body carries the matched path: a class-level title
+# would let a global finding mask a real per-repo one. base64 keeps a multi-line body one token.
 _keys() { jq -r '(.findings // []) | .[] | (.title + "\u001f" + .body) | @base64' 2>/dev/null; }
 _detail() { jq -r '.hookSpecificOutput.additionalContext // .systemMessage // ""' 2>/dev/null; }
 _systemmsg() { jq -r '.systemMessage // ""' 2>/dev/null; }
-# Generic verdict render+exit for single-repo verbs: prints _detail on 🚨, else the status
-# line, unless quiet; returns the EXIT_* code. (cmd_git_hook keeps its own loud post-pull
-# banner but shares EXIT_* and _systemmsg; cmd_scan's fleet loop has its own dedup/render.)
+# Shared by the single-repo verbs. cmd_git_hook and cmd_scan render their own, since one needs a
+# loud post-pull banner and the other a deduped fleet table.
 _render_verdict() {  # $1=engine JSON  $2=quiet(0/1)  -> echoes, returns EXIT_*
   local out="$1" quiet="$2" glyph; glyph=$(printf '%s' "$out" | _glyph)
   case "$glyph" in
@@ -108,10 +92,8 @@ _notify() {  # title, message — argv-passed (never interpolated into AppleScri
     -e 'end run' "$1" "$2" >/dev/null 2>&1 || true
 }
 
-# ── Roots resolution: argv PATHS > $WORMHOOK_SCAN_ROOTS > config file ────────────
-# A "base" is what the user points at (a repo, an org dir of repos, or any dir).
-# Globs in env/config are expanded here (leading ~ -> $HOME). Note: unquoted glob
-# expansion word-splits on whitespace, so root globs must not contain spaces.
+# Roots resolution: argv PATHS > $WORMHOOK_SCAN_ROOTS > config file. A "base" is whatever the
+# user points at. Unquoted glob expansion word-splits, so a root glob must hold no spaces.
 _expand_into() {  # appends existing dirs from a glob/path line to the global BASES[]
   local raw="$1" g; raw="${raw/#\~/$HOME}"
   set +f
@@ -125,16 +107,13 @@ _read_config_lines() {
     [[ -n "$line" ]] && _expand_into "$line"
   done < "$CONFIG"
 }
-# Git repos at/under a base: prune node_modules (perf + correctness) and never descend
-# into .git. Bounded by WORMHOOK_DEPTH (default 4) so an org dir of repos resolves but a
-# deep tree does not run away.
+# WORMHOOK_DEPTH (default 4) resolves an org dir of repos without letting a deep tree run away.
 _discover_repos() {  # $1=base -> repo roots, one per line
   find "$1" -maxdepth "${WORMHOOK_DEPTH:-4}" -name node_modules -prune \
     -o -name .git -prune -print 2>/dev/null | while IFS= read -r g; do printf '%s\n' "${g%/.git}"; done
 }
-# Turn a base into concrete scan targets (appends to TARGETS[]): the repo itself if it is
-# one; else the repos under it; else the dir itself (so an arbitrary non-repo dir still
-# scans) — but never a dependency/build dir, where a literal scan would be wrong/slow.
+# The repo itself, else the repos under it, else the dir itself — but never a dependency or
+# build dir, where scanning it AS a project would be both wrong and slow.
 _collect_targets() {  # $1=base
   local base="${1%/}" found=0 r
   if [[ -e "$base/.git" ]]; then TARGETS+=("$base"); return; fi
@@ -147,7 +126,7 @@ _collect_targets() {  # $1=base
   TARGETS+=("$base")
 }
 
-# ══ scan ═════════════════════════════════════════════════════════════════════════
+# ══ scan
 cmd_scan() {
   local mode=fast quiet=0 notify=0 json=0 persistence=0 literal=0 logfile=""
   BASES=()
@@ -157,8 +136,7 @@ cmd_scan() {
       --fast) mode=fast ;;
       --persistence) persistence=1 ;;
       --literal) literal=1 ;;
-      # Adapters never duplicate detection: the flag is just the engine env toggle
-      # (exact-match Tier-0 quarantine, issue #59) exported before the engine runs.
+      # Adapters never duplicate detection: the flag only exports the engine's env toggle.
       --quarantine) export WORMHOOK_QUARANTINE=1 ;;
       -q|--quiet-if-clean) quiet=1 ;;
       --notify) notify=1 ;;
@@ -173,9 +151,8 @@ cmd_scan() {
     shift
   done
 
-  # ── Global persistence pass (once): an empty CWD so only the $HOME/global T0 checks
-  #    fire. Its finding KEYS define "global"; per-repo findings matching them are not
-  #    repeated. (Keys, not titles — see _keys: a class-level title would over-match.)
+  # One global pass over an empty CWD, so only the $HOME/global T0 checks fire. Its finding
+  # KEYS define "global", and a per-repo finding matching one is not repeated below.
   local gtmp gout gdetail global_titles global_keys
   gtmp=$(mktemp -d)
   gout=$(_scan_one "$gtmp" fast)
@@ -228,7 +205,7 @@ cmd_scan() {
   done
   ROOTS=("${uniq[@]}")
 
-  # ── Per-repo scans ─────────────────────────────────────────────────────────────
+  # ── Per-repo scans
   local n=${#ROOTS[@]} g=0 y=0 r=0 i=0
   local P_GLYPH=() P_DISP=() P_TAIL=() P_DETAIL=() NDJSON=""
   for d in "${ROOTS[@]}"; do
@@ -237,8 +214,8 @@ cmd_scan() {
     out=$(_scan_one "$d" "$mode")
     glyph=$(printf '%s' "$out" | _glyph)
     disp="${d/#$HOME/~}"
-    # Parse titles once per repo — reused by the table tail and --json. Skipped on a clean,
-    # non-json repo where nothing reads them (avoids a jq fork per green repo on a sweep).
+    # Skipped on a clean non-json repo, where nothing reads them — that is one jq fork per
+    # green repo on a fleet sweep.
     rtitles=""
     [[ "$glyph" == "🚨" || "$json" == 1 ]] && rtitles=$(printf '%s' "$out" | _titles)
     localflag=0
@@ -259,8 +236,6 @@ cmd_scan() {
     fi
     # Collapse "🚨 but only global findings" to locally-clean (global shown once up top).
     [[ "$glyph" == "🚨" && "$localflag" == 0 ]] && glyph="🟢"
-    # Table tail: first finding title, else the cleaned status-line caveat — from the titles
-    # already parsed above, not a second _titles pass.
     tail=$(printf '%s' "$rtitles" | head -n1)
     [[ -n "$tail" ]] || tail=$(printf '%s' "$out" | _systemmsg | sed 's/^🟡 \[wormhook\] //; s/^🟢 \[wormhook\] //' | head -n1)
 
@@ -280,7 +255,7 @@ cmd_scan() {
     [[ "$r" -gt 0 || "$had_global" == 1 ]] && return "$EXIT_CRIT"; [[ "$y" -gt 0 ]] && return "$EXIT_DEGRADED"; return "$EXIT_OK"
   fi
 
-  # ── Render ───────────────────────────────────────────────────────────────────
+  # ── Render
   local any_finding=0; [[ "$r" -gt 0 || "$y" -gt 0 || "$had_global" == 1 ]] && any_finding=1
   if [[ "$quiet" == 1 && "$any_finding" == 0 ]]; then
     [[ -n "$logfile" ]] && printf '%s  clean (%d repos, %s)\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$n" "$mode" >> "$logfile"
@@ -320,7 +295,7 @@ cmd_scan() {
   return "$EXIT_OK"
 }
 
-# ══ install-cli ════════════════════════════════════════════════════════════════
+# ══ install-cli
 cmd_install_cli() {
   local bindir="$HOME/.local/bin"
   mkdir -p "$bindir"
@@ -334,7 +309,7 @@ cmd_install_cli() {
   esac
 }
 
-# ══ install-launchd ══════════════════════════════════════════════════════════════
+# ══ install-launchd
 _xml() { local s="$1"; s="${s//&/&amp;}"; s="${s//</&lt;}"; s="${s//>/&gt;}"; printf '%s' "$s"; }
 cmd_install_launchd() {
   local every=3600 paths=() bin noload=0 quarantine=0
@@ -361,15 +336,11 @@ TXT
   command -v wormhook-scan >/dev/null 2>&1 && bin="$(command -v wormhook-scan)" || bin="$SELF"
   local plist="$HOME/Library/LaunchAgents/$LABEL.plist"
   mkdir -p "$HOME/Library/LaunchAgents" "$(dirname "$SWEEP_LOG")"
-  # ProgramArguments: bin scan --fast --quiet-if-clean --notify --log LOG [paths...]
   local args=("$bin" scan --fast --quiet-if-clean --notify --log "$SWEEP_LOG")
-  # bash 3.2 (Apple /bin/bash) aborts on "${paths[@]}" when paths is an empty array
-  # under `set -u` — and no-PATHS is the default form (config/env roots). Guard the append.
+  # bash 3.2 aborts on "${paths[@]}" for an empty array under `set -u`, and no-PATHS is default.
   [[ ${#paths[@]} -gt 0 ]] && args+=("${paths[@]}")
-  # Render to a temp file first so we can lint + diff before touching the live plist.
-  # A bootout->bootstrap cycle re-registers the agent, which re-fires macOS's
-  # "App Background Activity" toast — so when nothing changed and it is already
-  # loaded, we leave the live item untouched and skip the reload entirely.
+  # Render to a temp file so it can be linted and diffed first: a bootout->bootstrap cycle
+  # re-fires macOS's "App Background Activity" toast, so an unchanged plist must not reload.
   local uid tmp; uid="$(id -u)"; tmp="$plist.tmp.$$"
   { printf '<?xml version="1.0" encoding="UTF-8"?>\n'
     printf '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
@@ -380,8 +351,7 @@ TXT
     printf '  </array>\n'
     printf '  <key>RunAtLoad</key><true/>\n'
     printf '  <key>StartInterval</key><integer>%s</integer>\n' "$every"
-    # Quarantine rides the ENGINE env toggle, not a CLI flag in ProgramArguments, so
-    # the sweep contains exact-match Tier-0 artifacts at 03:00 instead of only banner-ing.
+    # Quarantine rides the engine env toggle, not a ProgramArguments flag.
     [[ "$quarantine" == 1 ]] && printf '  <key>EnvironmentVariables</key><dict><key>WORMHOOK_QUARANTINE</key><string>1</string></dict>\n'
     printf '  <key>StandardOutPath</key><string>%s</string>\n' "$(_xml "$SWEEP_LOG")"
     printf '  <key>StandardErrorPath</key><string>%s</string>\n' "$(_xml "$SWEEP_LOG")"
@@ -391,8 +361,7 @@ TXT
     command rm -f "$tmp"; _die "generated plist failed plutil -lint: $tmp"
   fi
   if [[ "$noload" == 1 ]]; then mv -f "$tmp" "$plist"; echo "wrote (not loaded): $plist"; return 0; fi
-  # Idempotent reload: if the rendered plist is byte-identical to the live one AND
-  # the agent is already registered, do nothing — no bootout/bootstrap, no toast.
+  # Byte-identical and already registered => do nothing: no bootout, no bootstrap, no toast.
   if cmp -s "$tmp" "$plist" 2>/dev/null && launchctl print "gui/$uid/$LABEL" >/dev/null 2>&1; then
     command rm -f "$tmp"
     echo "already current + loaded: $plist (every ${every}s)"
@@ -415,15 +384,13 @@ cmd_uninstall_launchd() {
   [[ -f "$plist" ]] && { command rm -f "$plist"; echo "removed: $plist"; } || echo "not installed"
 }
 
-# ══ install-git-hook ═════════════════════════════════════════════════════════════
+# ══ install-git-hook
 _hook_block() {
-  # Marker delimiters come from the shared constant (single source). The body must stay
-  # clean of dropper tokens so the engine's MALICIOUS-GIT-HOOK Tier-0 check never self-flags.
+  # The body must stay clean of dropper tokens, or the engine's Tier-0 git-hook check self-flags.
   printf '%s\n' "$WORMHOOK_HOOK_MARKER"
   cat <<'BLOCK'
 # Added by `wormhook-scan install-git-hook`. Out-of-band on-pull audit; fail-open.
-# Forward the hook name + git's args so the report can show the correct changed-file
-# range per hook (post-checkout passes <old> <new>; merge/rebase set ORIG_HEAD).
+# Forward the hook name + git's args: post-checkout passes <old> <new>, merge/rebase set ORIG_HEAD.
 command -v wormhook-scan >/dev/null 2>&1 && wormhook-scan git-hook "$(basename "$0")" "$@" || true
 BLOCK
   printf '%s\n' "$WORMHOOK_HOOK_MARKER_END"
@@ -460,7 +427,7 @@ cmd_uninstall_git_hook() {
     f="$hookdir/$h"
     { [[ -f "$f" ]] && grep -qF "$WORMHOOK_HOOK_MARKER" "$f"; } || continue
     tmp="$f.wh.$$"
-    # Strip the marker..end block (exact string compare on $0 — robust to chars in the marker).
+    # Exact string compare on $0, so a regex metachar in the marker cannot misfire.
     awk -v o="$WORMHOOK_HOOK_MARKER" -v c="$WORMHOOK_HOOK_MARKER_END" \
       '$0==o{s=1} !s{print} $0==c{s=0}' "$f" > "$tmp"
     # If only a bare shebang (or nothing) remains, drop the file entirely.
@@ -472,7 +439,7 @@ cmd_uninstall_git_hook() {
   done
 }
 
-# ══ status / config / help ═══════════════════════════════════════════════════════
+# ══ status / config / help
 cmd_status() {
   echo "engine:   $ENGINE"
   echo "config:   $CONFIG $([[ -r "$CONFIG" ]] && echo '(present)' || echo '(missing — config --init)')"
@@ -554,30 +521,23 @@ SCAN
 TXT
 }
 
-# ══ git-hook ═════════════════════════════════════════════════════════════════════
-# Invoked by the installed post-merge/post-checkout/post-rewrite hooks. On an IOC it
-# prints a red banner right after the `git pull` — showing what the update changed
-# and the finding — so you SEE it and do not go on to run `npm run dev`. A post-op hook
-# cannot block the pull (the files already landed); the human-visible error is the gate.
-# Fail-open: any error exits 0 so it never wedges a git operation.
-#
-# KEY-DECISION 2026-08-02: every line here is budgeted for an LLM context, not just a
-# terminal — a `git pull` inside Claude Code puts this whole block in the transcript on
-# top of the PostToolUse verdict. Red keeps ONE banner line (colour, not rules, carries
-# the alarm), the changed-file list is capped at CHANGED_MAX with an honest "N of M"
-# count, and green is a short repo-basename line. Do not re-add ASCII rules or raise the
-# cap for emphasis; loudness comes from the glyph and the colour.
+# ══ git-hook
+# A post-op hook cannot block the pull, so the human-visible banner IS the gate. Fail-open:
+# any error exits 0, so it never wedges a git operation.
+
+# KEY-DECISION 2026-08-02: every line here is budgeted for an LLM context, since a `git pull`
+# inside Claude puts the whole block in the transcript. Do not re-add rules or raise the cap
+# for emphasis — colour and the glyph carry the alarm.
 CHANGED_MAX=20
 cmd_git_hook() {
   local hook="${1:-}"; [ $# -gt 0 ] && shift   # $1=hook name; remaining "$@" are git's hook args
   local repo changed="" out glyph
   repo=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null) || return 0
-  # Pick the "files this update changed" range HONESTLY per hook. ORIG_HEAD is the
-  # pre-op HEAD only for merge/rebase; post-checkout instead passes <prev> <new> on
-  # argv (and a third flag arg: 1=branch move, 0=file checkout => no meaningful range).
-  # Legacy installs forward no hook name (hook="") => fall through to the ORIG_HEAD path.
-  # `--stat-count` truncates in git itself, so the trailing "N files changed" summary
-  # still reports the true total even when the list above it is clipped.
+  # ORIG_HEAD is the pre-op HEAD only for merge/rebase; post-checkout passes <prev> <new> on
+  # argv, plus a flag arg (0 = file checkout, so no meaningful range). A legacy install
+  # forwards no hook name and falls through to ORIG_HEAD.
+
+  # `--stat-count` truncates inside git, so the "N files changed" summary stays true.
   case "$hook" in
     post-checkout)
       [ "${3:-1}" = 1 ] && [ -n "${1:-}" ] && [ -n "${2:-}" ] && \
@@ -595,15 +555,13 @@ cmd_git_hook() {
     return "$EXIT_CRIT"
   fi
   [[ "$glyph" == "🟡" ]] && printf '%s' "$out" | _systemmsg
-  # Clean pass: one short green line so a no-finding pull still confirms the scan ran.
-  # Basename, not the full path — git already told you which repo you are in.
+  # One short green line, so a no-finding pull still confirms the scan ran.
   [[ "$glyph" == "🟢" ]] && printf '\033[0;32m🟢 wormhook: %s clean\033[0m\n' "${repo##*/}"
   return "$EXIT_OK"
 }
 
-# ══ check ════════════════════════════════════════════════════════════════════════
-# Single-repo fast verdict — the exec-guard primitive (one engine pass, no fleet/dedup,
-# minimal latency). Exit 0 clean · 1 critical · 2 degraded.
+# ══ check
+# The exec-guard primitive: one engine pass, no fleet dedup, minimal latency.
 cmd_check() {
   local dir="$PWD" mode=fast quiet=0 a
   for a in "$@"; do
@@ -618,12 +576,9 @@ cmd_check() {
   _render_verdict "$(_scan_one "$dir" "$mode")" "$quiet"
 }
 
-# ══ shell-init ═══════════════════════════════════════════════════════════════════
-# Opt-in exec-guard: the out-of-Claude analog of the PreToolUse block. Wraps the JS
-# package managers (NOT `node` — too hot a path) so they refuse to run in a repo with a
-# live IOC, scan-on-exec so it catches code that arrived without a git hook firing.
-# Enable: eval "$(wormhook-scan shell-init)"  — add to ~/.zshrc / ~/.bashrc AFTER any
-# version manager (nvm/asdf), since it defines npm/pnpm/yarn/bun/npx as functions.
+# ══ shell-init
+# Opt-in exec-guard, the out-of-Claude analog of the PreToolUse block. Wraps the JS package
+# managers but NOT `node`, too hot a path. Scans on exec, so it catches code no git hook saw.
 cmd_shell_init() {
   cat <<'SH'
 # wormhook exec-guard (eval "$(wormhook-scan shell-init)") — refuse npm/pnpm/yarn/bun/npx
@@ -656,7 +611,7 @@ npx()  { __wormhook_guard && command npx  "$@"; }
 SH
 }
 
-# ── Dispatch ─────────────────────────────────────────────────────────────────────
+# ── Dispatch
 case "${1:-}" in
   install-cli)         shift; cmd_install_cli "$@" ;;
   install-launchd)     shift; cmd_install_launchd "$@" ;;

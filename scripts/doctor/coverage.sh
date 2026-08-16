@@ -1,24 +1,20 @@
 #!/bin/bash
-# SessionStart doctor — out-of-band trigger coverage. The Claude hook is one trigger, not the
-# engine; wormhook-scan.sh adds the non-Claude triggers. Reports which are wired:
-#   CLI on PATH · global git hook (all 3 of post-merge/post-checkout/post-rewrite) · hourly launchd sweep.
-#   silent all wired.  🟡 any ✗ -> shows the ✓/✗ picture + points at /wormhook-setup (silenceable).
-#   ⚪ silenced, or corrupt install (shared constants did not load).  launchd sweep is n/a off macOS.
+# SessionStart doctor — out-of-band trigger coverage: CLI on PATH, global git hook
+# (post-merge/post-checkout/post-rewrite), hourly launchd sweep (n/a off macOS).
+#   🟡 any ✗ (silenceable).  ⚪ silenced, or corrupt install.  All wired => silent.
 set -uo pipefail
 
 # shellcheck source=scripts/doctor/_utils.sh disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/_utils.sh"
 
-# Self-skip to ⚪ if the shared constants did not load (corrupt install) — without them the probe
-# below cannot know what to look for, and a false "✗" would be a lie.
+# Without the shared constants the probe cannot know what to look for, and a false "✗" is a lie.
 if [[ -z "${WORMHOOK_HOOK_MARKER:-}" || -z "${WORMHOOK_LAUNCHD_LABEL:-}" ]]; then
   wh_flag ⚪ coverage "n/a — shared constants did not load (corrupt install?)"
   exit 0
 fi
 
 _cli=✗; command -v wormhook-scan >/dev/null 2>&1 && _cli=✓
-# git-hook is ✓ only when ALL THREE installed hooks carry the marker — a partial/corrupted install
-# must not report full coverage.
+# ✓ demands all THREE markers: a partial install must not report full coverage.
 _hook=✗
 _hd=$(git config --global --get core.hooksPath 2>/dev/null); _hd="${_hd/#\~/$HOME}"
 if [[ -n "$_hd" ]]; then
@@ -35,7 +31,7 @@ else
 fi
 
 if [[ "$_cli" == "✓" && "$_hook" == "✓" && ( "$_sweep" == "✓" || "$_sweep" == "n/a" ) ]]; then
-  exit 0   # fully wired => silent (advisory check, no green line — doctor/CLAUDE.md)
+  exit 0
 elif wh_silenced "${WORMHOOK_SKIP_COVERAGE:-}"; then
   wh_flag ⚪ coverage "out-of-band incomplete (CLI:$_cli git-hook:$_hook hourly-sweep:$_sweep) (silenced)"
 else

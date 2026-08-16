@@ -1,13 +1,8 @@
 #!/bin/bash
-# SessionStart doctor — signature-corpus age. Signature detection is retrospective: the
-# block tier only knows campaigns already landed in malware-patterns.sh, and nothing else
-# fails when the corpus goes stale — a green engine can be detecting only last year's
-# worms. The observable state is WORMHOOK_SIGNATURES_ASOF (malware-patterns.sh): the date
-# the corpus was last verified against current advisories, bumped by the /update skill on
-# every landed campaign or by hand after a sweep that found nothing new to land.
-#   🟡 corpus older than WORMHOOK_SIGAGE_MAX_DAYS (default 60) — run /update (silenceable).
-#   ⚪ stale but silenced, or the constant is missing/malformed (corrupt install).
-#   Fresh is SILENT — advisory check, no green line (see doctor/CLAUDE.md).
+# SessionStart doctor — signature-corpus age. Detection is retrospective and nothing else fails
+# when the corpus goes stale, so a clean engine can be catching only last year's worms.
+#   🟡 older than WORMHOOK_SIGAGE_MAX_DAYS (default 60) — run /update (silenceable).
+#   ⚪ silenced, or WORMHOOK_SIGNATURES_ASOF missing/malformed.  Fresh => silent.
 set -uo pipefail
 
 # shellcheck source=scripts/doctor/_utils.sh disable=SC1091
@@ -28,8 +23,6 @@ max="${WORMHOOK_SIGAGE_MAX_DAYS:-60}"
 days=$(jq -n --arg d "$ASOF" '((now - (($d + "T00:00:00Z") | fromdate)) / 86400) | floor' 2>/dev/null) || days=""
 [[ "$days" =~ ^-?[0-9]+$ ]] || { wh_flag ⚪ sigage "cannot compute corpus age from $ASOF"; exit 0; }
 
-# Fresh => silent (advisory check; a green line every session is the noise this
-# check's siblings shed in the same change).
 (( days <= max )) && exit 0
 
 if wh_silenced "${WORMHOOK_SKIP_SIGAGE:-}"; then

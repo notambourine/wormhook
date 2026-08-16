@@ -228,13 +228,17 @@ fi
 if [[ -r "$SCAN_CLI" ]]; then
   _mktemp_case
   BIN="$CASE_HOME/.local/bin/wormhook-scan"
-  HOME="$CASE_HOME" bash "$SCAN_CLI" install-cli >/dev/null 2>&1
+  # XDG_CONFIG_HOME wins over $HOME when resolving the pointer, and a CI runner sets it — pin it
+  # into the case or install-cli writes the pointer onto the real machine and the asserts read air.
+  CASE_XDG="$CASE_HOME/.config"; PTR="$CASE_XDG/wormhook/install-path"
+  _install() { HOME="$CASE_HOME" XDG_CONFIG_HOME="$CASE_XDG" bash "$1" install-cli >/dev/null 2>&1; }
+  _install "$SCAN_CLI"
 
   if [[ -f "$BIN" && ! -L "$BIN" && -x "$BIN" ]]; then _ok "install-cli: writes an executable launcher, not a symlink"
   else _bad "install-cli: writes an executable launcher, not a symlink" "$BIN is missing, a symlink, or not executable"; fi
 
   cp "$BIN" "$CASE_DIR/launcher.1" 2>/dev/null
-  HOME="$CASE_HOME" bash "$SCAN_CLI" install-cli >/dev/null 2>&1
+  _install "$SCAN_CLI"
   if cmp -s "$CASE_DIR/launcher.1" "$BIN"; then _ok "install-cli: re-run is byte-idempotent"
   else _bad "install-cli: re-run is byte-idempotent" "second run rewrote $BIN"; fi
 
@@ -242,32 +246,33 @@ if [[ -r "$SCAN_CLI" ]]; then
   # and leave the launcher untouched.
   mkdir -p "$CASE_DIR/v99"
   cp -R "$REPO_ROOT/scripts" "$CASE_DIR/v99/" 2>/dev/null
-  HOME="$CASE_HOME" bash "$CASE_DIR/v99/scripts/wormhook-scan.sh" install-cli >/dev/null 2>&1
+  _install "$CASE_DIR/v99/scripts/wormhook-scan.sh"
   if cmp -s "$CASE_DIR/launcher.1" "$BIN"; then _ok "install-cli: a version move leaves the launcher byte-identical"
   else _bad "install-cli: a version move leaves the launcher byte-identical" "a release would re-alert macOS"; fi
   # Compare physical paths: install-cli resolves through /var -> /private/var, and so must this.
   WANT="$(cd -P "$CASE_DIR/v99" && pwd)"
-  GOT="$(cat "$CASE_HOME/.config/wormhook/install-path" 2>/dev/null)"
+  GOT="$(cat "$PTR" 2>/dev/null)"
   if [[ "$GOT" == "$WANT" ]]; then _ok "install-cli: the pointer follows the new install root"
-  else _bad "install-cli: the pointer follows the new install root" "want $WANT, got $GOT"; fi
+  else _bad "install-cli: the pointer follows the new install root" "want $WANT, got ${GOT:-<no pointer at $PTR>}"; fi
 
   # A legacy symlink must be REPLACED, never written through — cp onto one overwrites the
   # install it points at.
   SUM_BEFORE="$(shasum -a 256 "$SCAN_CLI" | cut -d' ' -f1)"
   ln -sf "$SCAN_CLI" "$BIN"
-  HOME="$CASE_HOME" bash "$SCAN_CLI" install-cli >/dev/null 2>&1
+  _install "$SCAN_CLI"
   if [[ ! -L "$BIN" ]]; then _ok "install-cli: replaces a legacy symlink with the launcher"
   else _bad "install-cli: replaces a legacy symlink with the launcher" "$BIN is still a symlink"; fi
   if [[ "$(shasum -a 256 "$SCAN_CLI" | cut -d' ' -f1)" == "$SUM_BEFORE" ]]; then
     _ok "install-cli: never writes through a symlink onto the installed CLI"
   else _bad "install-cli: never writes through a symlink onto the installed CLI" "clobbered $SCAN_CLI"; fi
 
-  # No manifest in a hermetic HOME, so this exercises the pointer-file resolver.
+  # No XDG_CONFIG_HOME here on purpose: the pointer path is baked in absolute at install time,
+  # so the launcher must resolve under launchd's bare environment. No manifest => pointer path.
   if HOME="$CASE_HOME" "$BIN" --help 2>/dev/null | grep -q 'wormhook-scan —'; then
     _ok "launcher: resolves the engine and runs"
   else _bad "launcher: resolves the engine and runs" "$BIN produced no help output"; fi
 
-  command rm -f "$CASE_HOME/.config/wormhook/install-path"
+  command rm -f "$PTR"
   HOME="$CASE_HOME" "$BIN" --help >/dev/null 2>&1; RC=$?
   if [[ "$RC" -eq 2 ]]; then _ok "launcher: both resolvers dead -> degraded exit 2, never a false 0"
   else _bad "launcher: both resolvers dead -> degraded exit 2, never a false 0" "got rc $RC"; fi

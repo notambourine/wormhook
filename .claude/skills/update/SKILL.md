@@ -90,8 +90,8 @@ A behavioral change (anything touching the scripts) **must**:
   sweep lands *nothing* new (the constant means "verified current as of", and the
   `doctor/sigage.sh` light nags when it ages out)
 - if the new campaign should appear in the **full** install/inspect description, update
-  `.claude-plugin/plugin.json`'s `description`. The marketplace **tagline**
-  (`.claude-plugin/marketplace.json`) is short and role-distinct — only touch it if the
+  `.claude-plugin/plugin.json`'s `description`. The browse **tagline** lives in the
+  `notambourine/claude` catalog row, not in this repo; only touch it there if the
   one-line pitch genuinely changed. The two are **not** kept in sync; there is no parity check.
 
 ## 6. Verify the change

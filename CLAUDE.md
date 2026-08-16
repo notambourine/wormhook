@@ -18,19 +18,24 @@ the code.
   hourly launchd sweep, the global git hook. Its adapter contract (verbs, git hook,
   shell-init, `action.yml`, installers) lives in `.claude/rules/scan-adapters.md`,
   paths-scoped to the adapter files.
-- `hooks/hooks.json` — event → script wiring. `.claude-plugin/{plugin,marketplace}.json` — manifests.
+- `hooks/hooks.json` — event → script wiring. `.claude-plugin/plugin.json` — the manifest.
 
 ## Invariants (don't break these)
 
 - **Behavior PRs must bump `.claude-plugin/plugin.json`.** CI fails a PR that touches
   `scripts/` or `hooks/` without a forward version move. Docs-only changes need no bump.
-- **The two `description` fields have different jobs — never sync them.**
-  `marketplace.json` carries a one-line browse tagline. `plugin.json` carries the full
-  install/inspect description: campaign + IOC + blocking detail ONLY — the reader is
-  deciding whether to trust a plugin about to scan their filesystem. Operational surfaces
-  (CLI, sweeps, CI gate, dashboard) belong in the README; a markdown link in the field
-  renders as dead text at inspect time (plain "see the README for …" prose is fine).
-  There is deliberately no parity check.
+- **Ship no `marketplace.json`.** This repo is a plugin, not a catalog. It is listed as a
+  row in `notambourine/claude`, so a second marketplace here would make a teammate add two
+  marketplaces to get one plugin. The browse tagline lives in that catalog's row; edit it
+  there. `plugin.json` carries the full install/inspect description: campaign + IOC +
+  blocking detail ONLY — the reader is deciding whether to trust a plugin about to scan
+  their filesystem. Operational surfaces (CLI, sweeps, CI gate, dashboard) belong in the
+  README; a markdown link in the field renders as dead text at inspect time (plain "see
+  the README for …" prose is fine). The two descriptions have different jobs: never sync
+  them, and there is deliberately no parity check.
+- **`claude plugin validate . --strict` warns on the root `CLAUDE.md`.** That warning is
+  allowlisted by name in `validate.yml`, and it is the ONLY one, because this file is maintainer
+  context, not context shipped to a plugin consumer. Every other warning still fails CI.
 - **Hybrid jq model.** The one line the doctor must emit without `jq` — `jq missing,
   scans are OFF` — is a static `printf` at the top of `doctor/deps.sh` **only**, which
   owns that alarm: if the check needed `jq` it would go silent in the exact case it

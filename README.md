@@ -24,8 +24,18 @@ Built and maintained by [NoTambourine](https://notambourine.com).
 ## Install
 
 ```bash
-claude plugin marketplace add notambourine/wormhook
-claude plugin install wormhook@wormhook --scope user
+claude plugin marketplace add notambourine/claude
+claude plugin install wormhook@notambourine --scope user
+```
+
+Already on `wormhook@wormhook`? A marketplace has no rename path, so remove the old one
+and add the catalog:
+
+```bash
+claude plugin uninstall wormhook@wormhook
+claude plugin marketplace remove wormhook
+claude plugin marketplace add notambourine/claude
+claude plugin install wormhook@notambourine --scope user
 ```
 
 Requires `jq` and `bash`. [`ripgrep`](https://github.com/BurntSushi/ripgrep) is

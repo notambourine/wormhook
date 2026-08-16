@@ -1,22 +1,15 @@
 #!/usr/bin/env bash
 # tests/run.sh — fixtures test seam over the wormhook engine.
 #
-# The engine is a pure stdin->stdout transducer: a hook JSON payload in, one verdict
-# JSON out, ZERO network. That makes it the most testable thing in the repo, yet it
-# had no automated coverage proving it DETECTS what it claims (the dogfood CI job only
-# proves "no false positive on self"). This harness exploits that interface: each case
-# is {synthetic payload + planted files in a hermetic temp CWD} -> assert on the emitted
-# JSON (parsed with jq).
+# The engine is a pure stdin->stdout transducer, so each case is {synthetic payload + planted
+# files in a hermetic temp CWD} -> assert on the emitted JSON. The dogfood CI job only proves
+# "no false positive on self"; this proves the engine DETECTS what it claims.
 #
-# Hermetic by construction: every case runs in its own mktemp dir with HOME and
-# XDG_CACHE_HOME redirected INTO that dir, so a planted ~/.claude dropper or scan-cache
-# marker can never touch the developer real $HOME (the engine reads $HOME for the
-# Tier-0 persistence checks). Each case cleans up on exit.
+# Hermetic by construction: HOME and XDG_CACHE_HOME redirect into each case's mktemp dir, so a
+# planted ~/.claude dropper or scan-cache marker can never touch the developer's real $HOME.
 #
-# Malware fixtures are assembled from fragments at runtime ($MAL_* below) so the
-# literal IOC strings (decode-then-eval, agent-hijack dropper names) never sit in this
-# source file -- otherwise the harness would trip wormhook scanning its OWN tree, and
-# editor security hooks would block writing it.
+# Malware fixtures assemble from fragments at runtime, so no literal IOC string sits in this
+# source — otherwise the harness would trip wormhook scanning its OWN tree.
 #
 # bash 3.2 / Apple /bin/bash safe: no associative arrays, no mapfile, no ${arr[@]} on
 # a possibly-empty array under set -u. shellcheck-clean under the repo default floor.
@@ -54,26 +47,21 @@ TMP_DIRS=()
 cleanup() { local d; for d in "${TMP_DIRS[@]:-}"; do [[ -n "$d" && -d "$d" ]] && rm -rf "$d"; done; }
 trap cleanup EXIT
 
-# _mktemp_case — a fresh hermetic sandbox: $CASE_DIR with home/, cache/, cwd/ subdirs.
-# Sets the globals CASE_DIR / CASE_HOME / CASE_CACHE / CASE_CWD. Redirecting HOME and
-# XDG_CACHE_HOME into here is what keeps the Tier-0 $HOME persistence checks and the
-# Tier-2 scan-cache OFF the developer real machine.
-_mktemp_case() {
+# Redirecting HOME and XDG_CACHE_HOME here keeps the Tier-0 persistence checks and the Tier-2
+# scan cache off the developer's real machine.
+_mktemp_case() {  # -> CASE_DIR / CASE_HOME / CASE_CACHE / CASE_CWD
   CASE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/wormhook-test.XXXXXX")"
   TMP_DIRS+=("$CASE_DIR")
   CASE_HOME="$CASE_DIR/home"; CASE_CACHE="$CASE_DIR/cache"; CASE_CWD="$CASE_DIR/cwd"
   mkdir -p "$CASE_HOME" "$CASE_CACHE" "$CASE_CWD"
 }
 
-# _run_engine — drive the UNCHANGED engine with a payload, isolated HOME + cache.
-# $1 = full payload JSON (built by the caller with jq --arg). Echoes the verdict JSON.
-_run_engine() {
+_run_engine() {  # $1 = payload JSON -> the verdict JSON, from the UNCHANGED engine
   printf '%s' "$1" | HOME="$CASE_HOME" XDG_CACHE_HOME="$CASE_CACHE" bash "$ENGINE" 2>/dev/null
 }
 
-# _payload — build a payload JSON the same way Claude / the CLI does (jq --arg, so a
-# path with quotes can never break out). $1=event  $2=command (optional; "" to omit).
-_payload() {
+# Built the way Claude and the CLI build it: jq --arg, so a quoted path cannot break out.
+_payload() {  # $1=event  $2=command (optional)
   local ev="$1" cmd="${2:-}"
   if [[ -n "$cmd" ]]; then
     jq -nc --arg c "$cmd" --arg w "$CASE_CWD" --arg e "$ev" \
@@ -83,10 +71,8 @@ _payload() {
   fi
 }
 
-# ── Assertion primitives ────────────────────────────────────────────────────────
-# Each prints PASS/FAIL with the case name and tallies. A FAIL never aborts the run
-# (set -e is off) so one broken case does not hide the others; the final exit code
-# is what CI gates on.
+# A FAIL never aborts the run (set -e is off), so one broken case cannot hide the others.
+# The final exit code is what CI gates on.
 _ok()  { PASS=$((PASS+1)); printf '  \033[0;32mPASS\033[0m  %s\n' "$1"; }
 _bad() { FAIL=$((FAIL+1)); printf '  \033[1;31mFAIL\033[0m  %s\n' "$1"; [[ -n "${2:-}" ]] && printf '          %s\n' "$2"; }
 
@@ -106,12 +92,9 @@ echo "wormhook fixtures harness"
 echo "  engine: $ENGINE"
 echo
 
-# ══════════════════════════════════════════════════════════════════════════════════
 # 1. PER-TIER POSITIVES — one planted IOC per tier produces the expected verdict.
-# ══════════════════════════════════════════════════════════════════════════════════
 
-# --- Tier 0: persistence (agent-hijack dropper in $HOME/.claude). Never cached,
-#     always runs. UserPromptSubmit can block -> top-level decision:"block".
+# --- Tier 0: never cached, always runs. UPS blocks via a top-level decision.
 _mktemp_case
 mkdir -p "$CASE_HOME/.claude"
 printf '// agent-hijack dropper payload\n' > "$CASE_HOME/.claude/$MAL_DROPPER"
@@ -119,16 +102,14 @@ OUT="$(_run_engine "$(_payload UserPromptSubmit)")"
 assert_jq "T0 persistence: HOME/.claude dropper blocks (UPS)" "$OUT" \
   '.decision=="block" and (.systemMessage|contains("AGENT-HIJACK PERSISTENCE"))'
 
-# --- Tier 1: project-source signature (decode-then-eval injected loader).
-#     PreToolUse install gate -> hard deny.
+# --- Tier 1: the PreToolUse install gate hard-denies an injected loader.
 _mktemp_case
 printf '%s\n' "$MAL_INJECT" > "$CASE_CWD/index.js"
 OUT="$(_run_engine "$(_payload PreToolUse 'npm install')")"
 assert_jq "T1 project source: injected loader blocks (PreToolUse)" "$OUT" \
   '.hookSpecificOutput.permissionDecision=="deny" and (.hookSpecificOutput.permissionDecisionReason|contains("MALICIOUS CODE IN PROJECT SOURCE FILE"))'
 
-# --- Tier 2: node_modules payload-file IOC. Needs an install-class PostToolUse to
-#     force the expensive walk. A known payload filename = proof.
+# --- Tier 2: an install-class PostToolUse forces the expensive walk; the name is proof.
 _mktemp_case
 mkdir -p "$CASE_CWD/node_modules/evil-pkg"
 printf '{"name":"x"}' > "$CASE_CWD/package.json"
@@ -137,8 +118,7 @@ OUT="$(_run_engine "$(_payload PostToolUse 'npm install')")"
 assert_jq "T2 node_modules: payload-file IOC -> red verdict (PostToolUse)" "$OUT" \
   '.verdict=="red" and (.findings|map(.title)|any(contains("NPM SUPPLY-CHAIN MALWARE")))'
 
-# --- Tier 2 (behavioral content): a node_modules .js with a decode-then-eval marker
-#     (the higher-FP heuristic that lives ONLY in this tier, never the block tier).
+# --- Tier 2 behavioral: the higher-FP heuristic lives ONLY here, never in a block tier.
 _mktemp_case
 mkdir -p "$CASE_CWD/node_modules/lib"
 printf '{"name":"x"}' > "$CASE_CWD/package.json"
@@ -147,13 +127,10 @@ OUT="$(_run_engine "$(_payload PostToolUse 'npm install')")"
 assert_jq "T2 node_modules: decode-then-eval behavioral content -> red" "$OUT" \
   '.verdict=="red" and (.findings|map(.title)|any(contains("NPM SUPPLY-CHAIN MALWARE")))'
 
-# ══════════════════════════════════════════════════════════════════════════════════
 # 2. FALSE-POSITIVE REGRESSIONS — clean trees must stay green.
-# ══════════════════════════════════════════════════════════════════════════════════
 
-# --- adc-e.uk collision (v0.15.2 regression guard): a real @aws-sdk/core
-#     partitions.json ships `api.cloud-aws.adc-e.uk` as the aws-iso-e partition
-#     dualStackDnsSuffix. Dropping that IOC was the fix; this asserts it stays dropped.
+# --- v0.15.2 guard: @aws-sdk/core ships `api.cloud-aws.adc-e.uk` as a real partition
+#     suffix, so that IOC must stay dropped.
 _mktemp_case
 mkdir -p "$CASE_CWD/node_modules/@aws-sdk/core"
 printf '{"name":"x"}' > "$CASE_CWD/package.json"
@@ -189,8 +166,7 @@ OUT="$(_run_engine "$(_payload SessionStart)")"
 assert_jq "FP guard: ordinary clean source stays green (SessionStart)" "$OUT" \
   '.verdict=="green"'
 
-# --- A user DENY rule in .claude/settings.json carrying a curl-pipe pattern is
-#     security POLICY, not dropper wiring — del(.permissions) must keep it green.
+# --- A user DENY rule carrying a curl-pipe is security POLICY, not dropper wiring.
 _mktemp_case
 mkdir -p "$CASE_CWD/.claude"
 cat > "$CASE_CWD/.claude/settings.json" <<'JSON'
@@ -201,11 +177,8 @@ OUT="$(_run_engine "$(_payload UserPromptSubmit)")"
 assert_jq "FP guard: curl-pipe DENY policy does not self-flag (UPS clean)" "${OUT:-{}}" \
   '(.decision // "") != "block"'
 
-# ══════════════════════════════════════════════════════════════════════════════════
-# 3. EMISSION-SHAPE CONTRACT — the two block events emit DISTINCT, non-interchangeable
-#    shapes. PreToolUse nests permissionDecision; UserPromptSubmit puts decision
+# 3. EMISSION-SHAPE CONTRACT — PreToolUse nests permissionDecision; UPS puts decision
 #    top-level and must NOT carry hookSpecificOutput.additionalContext.
-# ══════════════════════════════════════════════════════════════════════════════════
 _mktemp_case
 printf '%s\n' "$MAL_INJECT" > "$CASE_CWD/loader.js"
 PRE="$(_run_engine "$(_payload PreToolUse 'npm install')")"
@@ -223,12 +196,8 @@ assert_jq "shape: PreToolUse carries no top-level decision" "$PRE" '(.decision /
 assert_jq "shape: UserPromptSubmit carries no permissionDecision" "$UPS" \
   '(.hookSpecificOutput.permissionDecision // null)==null'
 
-# ══════════════════════════════════════════════════════════════════════════════════
-# 4. GIT-HOOK BODY NEVER SELF-FLAGS — makes CLAUDE.md "Verified by test" true.
-#    Use the ACTUAL installer to write the hook (not a re-synthesis), so we test
-#    exactly the body that ships. Install into an isolated HOME so it touches a
-#    sandbox core.hooksPath, never the developer global git config.
-# ══════════════════════════════════════════════════════════════════════════════════
+# 4. GIT-HOOK BODY NEVER SELF-FLAGS — driven through the ACTUAL installer, not a
+#    re-synthesis, into an isolated HOME so it never touches the real git config.
 if [[ -r "$SCAN_CLI" ]] && command -v git >/dev/null 2>&1; then
   _mktemp_case
   mkdir -p "$CASE_CWD/.git/hooks"
@@ -237,9 +206,8 @@ if [[ -r "$SCAN_CLI" ]] && command -v git >/dev/null 2>&1; then
   HOME="$CASE_HOME" bash "$SCAN_CLI" install-git-hook >/dev/null 2>&1
   HOOK="$CASE_DIR/global-hooks/post-merge"
   if [[ -f "$HOOK" ]]; then
-    # Place the real installed hook body where the Tier-0 MALICIOUS-GIT-HOOK check scans
-    # it: the repo own .git/hooks. SessionStart yields an explicit green verdict (a
-    # stronger "nothing flagged" signal than UPS silent-clean).
+    # SessionStart yields an explicit green verdict — a stronger "nothing flagged" signal
+    # than UPS silent-clean.
     cp "$HOOK" "$CASE_CWD/.git/hooks/post-merge"
     OUT="$(_run_engine "$(_payload SessionStart)")"
     assert_jq "git-hook body does NOT self-flag (Tier-0, real installer body)" "$OUT" \
@@ -255,13 +223,8 @@ else
   _bad "git-hook body never self-flags" "wormhook-scan.sh or git unavailable — cannot synthesize the real hook body"
 fi
 
-# ══════════════════════════════════════════════════════════════════════════════════
-# 5. TIER-2 SCAN-CACHE — a clean install-class walk populates the marker and a later
-#    SessionStart reuses it. The key (lockfile hash + dir mtimes) is blind to an
-#    in-place OVERWRITE of an existing dep file (issue #55): no create/delete/rename
-#    moves a dir mtime, and no install ran so the lockfile is untouched. The marker
-#    TTL is what bounds that window — an expired marker forces the full walk.
-# ══════════════════════════════════════════════════════════════════════════════════
+# 5. TIER-2 SCAN-CACHE — the key is blind to an in-place OVERWRITE of a dep file (#55),
+#    since no dir mtime moves and no install ran. The marker TTL bounds that window.
 _mktemp_case
 mkdir -p "$CASE_CWD/node_modules/leftpad"
 printf '{"name":"t","version":"1.0.0"}' > "$CASE_CWD/package.json"
@@ -282,23 +245,19 @@ OUT="$(_run_engine "$(_payload SessionStart)")"
 assert_jq "T2 cache: fresh marker + unchanged key -> SessionStart reuses cache" "$OUT" \
   '.verdict=="green" and (.systemMessage|contains("cached, deps unchanged"))'
 
-# Overwrite an EXISTING dep file (the key cannot see this), then expire the marker by
-# backdating it past the 24h TTL: the next SessionStart must re-walk and go red.
+# Overwrite an existing dep file, then backdate the marker past its TTL: the next
+# SessionStart must re-walk and go red.
 printf '%s\n' "$MAL_DECODE_EVAL" > "$CASE_CWD/node_modules/leftpad/index.js"
 touch -t 202001010000 "$MARKER_FILE" 2>/dev/null
 OUT="$(_run_engine "$(_payload SessionStart)")"
 assert_jq "T2 cache TTL: expired marker re-walks and catches in-place overwrite" "$OUT" \
   '.verdict=="red" and (.findings|map(.title)|any(contains("NPM SUPPLY-CHAIN MALWARE")))'
 
-# ══════════════════════════════════════════════════════════════════════════════════
-# 6. COVERAGE-GAP REGRESSIONS (issues #58/#60, archived in issues.local/):
-#    the git-hook scan must resolve a WORKTREE's hooks dir (.git is a file there),
-#    and the .pth sweep must see $VIRTUAL_ENV (any venv name) and pip --user's
-#    ~/.local site-packages, not just the four conventional CWD venv names.
-# ══════════════════════════════════════════════════════════════════════════════════
+# 6. COVERAGE-GAP REGRESSIONS (#58/#60) — a WORKTREE's hooks dir (.git is a FILE there),
+#    plus $VIRTUAL_ENV and pip --user roots, not just the four conventional venv names.
 
-# --- Worktree: a poisoned post-merge in the MAIN checkout's .git/hooks governs the
-#     worktree too; scanning from the worktree must still find it.
+# --- The main checkout's .git/hooks governs the worktree too, so a scan from the
+#     worktree must still find a poisoned post-merge.
 if command -v git >/dev/null 2>&1; then
   _mktemp_case
   git -C "$CASE_CWD" init -q &&
@@ -318,8 +277,7 @@ else
   _bad "T0 git-hook: worktree resolves main repo hooks dir" "git unavailable"
 fi
 
-# --- $VIRTUAL_ENV: an ACTIVE venv under a non-conventional name (venv312) is seeded
-#     from the environment, not guessed by name.
+# --- An active venv under a non-conventional name is seeded from the env, not guessed.
 _mktemp_case
 mkdir -p "$CASE_CWD/venv312/lib/python3.12/site-packages"
 printf '%s\n' "$MAL_PTH" > "$CASE_CWD/venv312/lib/python3.12/site-packages/evil.pth"
@@ -353,18 +311,13 @@ OUT="$(_run_engine "$(_payload PreToolUse 'pip install requests')")"
 assert_jq "#58 .pth: ~/Library/Python user site denies (PreToolUse)" "$OUT" \
   '.hookSpecificOutput.permissionDecision=="deny" and (.hookSpecificOutput.permissionDecisionReason|contains("MALICIOUS PYTHON .pth"))'
 
-# ══════════════════════════════════════════════════════════════════════════════════
-# 7. GATE DECOMPOSITION + TARGET DIR (issues #56/#57): compound and env-prefixed
-#    commands must gate (the harness `if` already matched them; the old ^-anchored
-#    regex silently dropped them), and Tier 1 must read the manifest the command
-#    operates on — cd target, --prefix/--cwd dir, workspace packages — not only $CWD.
-# ══════════════════════════════════════════════════════════════════════════════════
+# 7. GATE DECOMPOSITION + TARGET DIR (#56/#57) — compound and env-prefixed commands must
+#    gate, and Tier 1 must read the manifest the command operates on, not only $CWD.
 
 # Poisoned install-lifecycle manifest, assembled from fragments (see header).
 _poison_manifest() { jq -n --arg s "node $MAL_DROPPER" '{scripts:{preinstall:$s}}' > "$1"; }
 
-# --- #56+#57: `cd sub && npm install` (the normal Bash-tool shape in a monorepo)
-#     gates, and the deny comes from the SUB manifest, not the clean root one.
+# --- #56+#57: `cd sub && npm install` gates, and the deny comes from the SUB manifest.
 _mktemp_case
 mkdir -p "$CASE_CWD/sub"
 printf '{"scripts":{}}' > "$CASE_CWD/package.json"
@@ -396,8 +349,8 @@ OUT="$(_run_engine "$(_payload PreToolUse 'npm --prefix packages/api install')")
 assert_jq "#57: npm --prefix packages/api install denies on that manifest" "$OUT" \
   '.hookSpecificOutput.permissionDecision=="deny" and (.hookSpecificOutput.permissionDecisionReason|contains("MALICIOUS LIFECYCLE"))'
 
-# --- #57: a root install runs the lifecycle of every workspace, so a poisoned
-#     workspace preinstall must deny a plain `npm install` at the root.
+# --- #57: a root install runs every workspace's lifecycle, so a poisoned workspace
+#     preinstall must deny a plain root `npm install`.
 _mktemp_case
 mkdir -p "$CASE_CWD/packages/evil"
 jq -n '{workspaces:["packages/*"],scripts:{}}' > "$CASE_CWD/package.json"
@@ -416,8 +369,7 @@ OUT="$(_run_engine "$(_payload PreToolUse 'pnpm install')")"
 assert_jq "#57 pnpm-workspace.yaml: poisoned workspace preinstall denies" "$OUT" \
   '.hookSpecificOutput.permissionDecision=="deny" and (.hookSpecificOutput.permissionDecisionReason|contains("MALICIOUS LIFECYCLE"))'
 
-# --- FP guard: a clean monorepo with a benign workspace preinstall stays green
-#     through the widened gate (compound + env-prefixed form).
+# --- FP guard: a benign workspace preinstall stays green through the widened gate.
 _mktemp_case
 mkdir -p "$CASE_CWD/packages/app"
 jq -n '{workspaces:["packages/*"],scripts:{}}' > "$CASE_CWD/package.json"
@@ -426,14 +378,11 @@ OUT="$(_run_engine "$(_payload PreToolUse 'cd packages/app && CI=1 npm install')
 assert_jq "FP guard: clean compound install in a workspace stays green" "$OUT" \
   '.verdict=="green"'
 
-# ══════════════════════════════════════════════════════════════════════════════════
-# 8. OPT-IN QUARANTINE (issue #59) — WORMHOOK_QUARANTINE=1 renames + chmod 000 an
-#    EXACT-MATCH Tier-0 artifact (reversible containment). Behavioral matches stay
-#    report-only, and with the flag unset the engine never mutates anything.
-# ══════════════════════════════════════════════════════════════════════════════════
+# 8. OPT-IN QUARANTINE (#59) — the flag renames + chmod 000 an EXACT-MATCH artifact.
+#    Behavioral matches stay report-only, and unset the engine mutates nothing.
 
-# Exact-IOC names come from the signature source of truth (never literal here, so the
-# harness cannot trip a future content signature scanning its own tree).
+# Names come from the signature source of truth, never literal here, so the harness cannot
+# trip a future content signature scanning its own tree.
 # shellcheck source=../scripts/malware-patterns.sh disable=SC1091
 . "$REPO_ROOT/scripts/malware-patterns.sh"
 
@@ -449,8 +398,7 @@ else
   _bad "quarantine default-off: artifact left in place" "file moved without the flag"
 fi
 
-# --- Flag on: the exact-match dropper is renamed, the block still fires, and the
-#     alert body names the action.
+# --- Flag on: the dropper is renamed, the block still fires, the body names the action.
 _mktemp_case
 mkdir -p "$CASE_HOME/.claude"
 printf '// dropper\n' > "$CASE_HOME/.claude/$MAL_DROPPER"
@@ -470,8 +418,8 @@ else
   _bad "quarantine: action recorded in quarantine.log" "log missing or empty"
 fi
 
-# --- Behavioral .pth match stays report-only even with the flag on (the FP-tolerance
-#     invariant: an unattended rename demands exact-match confidence).
+# --- A behavioral .pth match stays report-only even with the flag on: an unattended
+#     rename demands exact-match confidence.
 _mktemp_case
 mkdir -p "$CASE_CWD/.venv/lib/python3.12/site-packages"
 printf '%s\n' "$MAL_PTH" > "$CASE_CWD/.venv/lib/python3.12/site-packages/evil.pth"
@@ -499,16 +447,16 @@ else
   _bad "quarantine: known-bad .pth name renamed" "exact-name IOC left in place"
 fi
 
-# ══════════════════════════════════════════════════════════════════════════════════
-# 9. SELF-INTEGRITY DOCTOR LIGHT (issue #61) — a pristine copy of scripts/ goes 🟢;
-#    one appended line to the engine flips the SAME check 🔴. Runs on a COPY so the
-#    real tree is never touched.
-# ══════════════════════════════════════════════════════════════════════════════════
+# 9. SELF-INTEGRITY DOCTOR LIGHT (#61) — a pristine copy says nothing; one appended line
+#    flips the SAME check 🔴. Runs on a COPY, so the real tree is never touched.
 _mktemp_case
 cp -R "$REPO_ROOT/scripts" "$CASE_DIR/scripts"
 OUT="$(bash "$CASE_DIR/scripts/doctor/integrity.sh" 2>/dev/null)"
-assert_jq "integrity: pristine copy reports 🟢" "$OUT" \
-  '.systemMessage|contains("🟢") and contains("integrity")'
+if [[ -z "$OUT" ]]; then
+  _ok "integrity: pristine copy is silent"
+else
+  _bad "integrity: pristine copy is silent" "emitted: $OUT"
+fi
 printf '\n# appended by test\n' >> "$CASE_DIR/scripts/wormhook.sh"
 OUT="$(bash "$CASE_DIR/scripts/doctor/integrity.sh" 2>/dev/null)"
 assert_jq "integrity: one appended line flips 🔴 and names wormhook.sh" "$OUT" \
@@ -518,8 +466,8 @@ OUT="$(bash "$CASE_DIR/scripts/doctor/integrity.sh" 2>/dev/null)"
 assert_jq "integrity: missing manifest degrades 🟡 (fail open, loud)" "$OUT" \
   '.systemMessage|contains("🟡") and contains("manifest missing")'
 
-# 10. VERSION-DRIFT DOCTOR LIGHT: it reads a plugins/cache/ layout no dev checkout has,
-# so it went dead for 16 releases unnoticed. Both install shapes are fixtures below.
+# 10. VERSION-DRIFT DOCTOR LIGHT — it reads a plugins/cache/ layout no dev checkout has,
+#     so it went dead for 16 releases unnoticed. Both install shapes are fixtures below.
 
 # _mkplug <root> <version> [name]: a minimal installed plugin tree with the real check.
 _mkplug() {
@@ -529,8 +477,8 @@ _mkplug() {
 }
 _drift() { CLAUDE_PLUGIN_ROOT="$1" bash "$1/scripts/doctor/drift.sh" 2>/dev/null; }
 
-# --- url-sourced catalog row (how notambourine/claude lists wormhook): the catalog
-#     clone holds no copy, so a newer sibling in the cache is the only local evidence.
+# --- url-sourced row: the catalog clone holds no copy, so a newer cache sibling is the
+#     only local evidence.
 _mktemp_case
 P="$CASE_DIR/.claude/plugins"
 mkdir -p "$P/marketplaces/notambourine/.claude-plugin"

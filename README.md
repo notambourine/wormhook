@@ -41,13 +41,12 @@ claude plugin install wormhook@notambourine --scope user
 Requires `jq` and `bash`. [`ripgrep`](https://github.com/BurntSushi/ripgrep) is
 optional but strongly recommended — content scans use it when present (43× faster than
 BSD grep on large trees) and fall back to `grep` otherwise. There's nothing to invoke;
-it runs automatically. At `SessionStart` a doctor dashboard reports health: two
-always-on lights — runtime deps and
-[engine self-integrity](#threat-model-the-scanner-as-a-target) — plus advisory checks
-(version drift, signature-corpus age, out-of-band coverage, CI supply-chain-gate
-coverage, the recommended [companion firewalls](#beyond-the-tiers), a blast-radius
-exposure audit) that stay silent when healthy and speak only with a finding, each
-carrying the one-liner to fix it.
+it runs automatically. At `SessionStart` a doctor dashboard reports health: runtime deps,
+[engine self-integrity](#threat-model-the-scanner-as-a-target), version drift,
+signature-corpus age, out-of-band coverage, CI supply-chain-gate coverage, the recommended
+[companion firewalls](#beyond-the-tiers), and a blast-radius exposure audit. Every check
+stays silent when healthy and speaks only with a finding, each carrying the one-liner to
+fix it — so a quiet launch means a clean one.
 
 ## Run it outside Claude
 

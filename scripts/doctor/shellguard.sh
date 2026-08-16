@@ -1,20 +1,11 @@
 #!/bin/bash
-# SessionStart doctor — shell exec-guard hygiene (clobber detection). The opt-in exec-guard
-# (eval "$(wormhook-scan shell-init)") wraps npm/pnpm/yarn/bun/npx as shell functions. If the user
-# ALSO keeps a separate Socket Firewall wrapper (npm() { sfw npm "$@"; }), the two define the same
-# names and whichever rc block loads last silently clobbers the other — disabling a layer (the
-# wormhook local-IOC guard OR the sfw registry firewall).
-#
-# What is OBSERVABLE here is the rc-file TEXT on disk (a plain file read, like coverage.sh greps
-# the git-hook files) — NOT the interactive runtime (which functions actually won the clobber,
-# which load order ran): a non-interactive SessionStart hook cannot see that. So this check only
-# flags the definite clobber ANTI-PATTERN in the text; it never asserts a setup is correctly
-# composed (that is the non-observable positive). It reads the live $HOME rc files the shell loads
-# (not any dotfiles repo). False-negative-only by design: it skips sourced fragments/includes and
-# multi-line function bodies, so it can MISS a clobber but never cries wolf on a correct setup
-# (the composed block's PM functions call __sc_run, not sfw, so they do not match).
-#   🟡 clobber: exec-guard + a bare `sfw` PM wrapper coexist -> compose them (/wormhook-setup).
-#   ⚪ clobber but silenced.  silent: no clobber, guard not wired (opt-in), or no rc files.
+# SessionStart doctor — shell exec-guard clobber detection. The opt-in exec-guard and a separate
+# Socket Firewall wrapper both define npm()/pnpm()/etc, so whichever rc block loads last silently
+# disables the other layer. Only rc-file TEXT is observable; the interactive runtime (which
+# function won, what load order ran) is not, so this flags the anti-pattern and never asserts a
+# setup is correctly composed. False-negative-only by design: it skips sourced fragments and
+# multi-line bodies, so it can MISS a clobber but never cries wolf on a composed rc.
+#   🟡 clobber (silenceable).  ⚪ silenced.  No clobber / no guard / no rc files => silent.
 set -uo pipefail
 
 # shellcheck source=scripts/doctor/_utils.sh disable=SC1091
@@ -25,18 +16,13 @@ for f in "$HOME/.zshrc" "$HOME/.zshenv" "$HOME/.bashrc" "$HOME/.bash_profile" "$
   [[ -f "$f" ]] && rc_files+=("$f")
 done
 
-# No rc files, or the opt-in guard not wired => n/a => silent (advisory check —
-# doctor/CLAUDE.md; /wormhook-setup and the README carry the adoption pitch, not a light).
 (( ${#rc_files[@]} == 0 )) && exit 0
 
-# Is the opt-in exec-guard wired at all? (Both the standalone eval line and the composed block
-# carry `wormhook-scan shell-init`.) grep -l is portable to BSD (macOS) and GNU grep.
+# Both the standalone eval line and the composed block carry `wormhook-scan shell-init`.
 grep -lE 'wormhook-scan[[:space:]]+shell-init' "${rc_files[@]}" >/dev/null 2>&1 || exit 0
 
-# Guard is wired. Clobber anti-pattern = a package-manager function whose body calls `sfw`
-# DIRECTLY (e.g. `npm() { sfw npm "$@"; }`). The composed block's PM functions call `__sc_run`
-# (sfw is reached only inside that helper), so they do NOT match — no false positive on a correct
-# setup. uv/cargo are intentionally sfw-only and not PM names here, so they never trip this.
+# The anti-pattern is a PM function calling `sfw` DIRECTLY. A composed block's PM functions call
+# `__sc_run` instead, so they cannot match; uv/cargo are sfw-only and are not PM names here.
 clobber=$(grep -lE '^[[:space:]]*(npm|pnpm|yarn|bun|npx)[[:space:]]*\([[:space:]]*\)[[:space:]]*\{[^}]*sfw' "${rc_files[@]}" 2>/dev/null) || true
 
 if [[ -n "$clobber" ]]; then
@@ -50,4 +36,4 @@ if [[ -n "$clobber" ]]; then
   exit 0
 fi
 
-exit 0   # guard wired, no clobber => silent (no green line — doctor/CLAUDE.md)
+exit 0

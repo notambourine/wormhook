@@ -1,11 +1,9 @@
 #!/bin/bash
-# SessionStart doctor — blast-radius exposure audit (issue #15). A read-only punch list of long-lived
-# secrets sitting in the exact paths the worms harvest: "how bad if detection misses." Advisory ONLY,
-# never blocks (SessionStart emits systemMessage, never a decision). All checks are pure stat/grep;
-# no secret VALUE is ever read into the message, only paths/filenames (and those flow through jq --arg,
-# so naming the offending file is injection-safe). Scoped to three near-zero-FP checks so it stays a
-# punch list, not a nag — the npm-token and static-AWS-creds candidates stay deferred to hold that bar.
-#   silent nothing found (advisory check).  🟡 N secret class(es) found (+ advisory additionalContext).
+# SessionStart doctor — blast-radius exposure audit (issue #15): long-lived secrets sitting in
+# the exact paths the worms harvest, answering "how bad if detection misses". Advisory only.
+# No secret VALUE ever reaches the message, only paths. Held to three near-zero-FP checks so it
+# stays a punch list, not a nag (npm-token and static-AWS-creds candidates stay deferred).
+#   🟡 N secret class(es) found.  Nothing found => silent.
 set -uo pipefail
 
 # shellcheck source=scripts/doctor/_utils.sh disable=SC1091
@@ -13,10 +11,8 @@ set -uo pipefail
 
 audit=()
 
-# 1) Passphrase-less SSH private keys. `ssh-keygen -y -P '' -f <key>` exits 0 ONLY when the key has no
-#    passphrase (it never prompts, because -P supplies one) — more robust than grepping "ENCRYPTED",
-#    which misses the new OpenSSH key format. Skip pubkeys/known_hosts/config; ssh-keygen rejects
-#    non-keys, so survivors are real private keys.
+# 1) Passphrase-less SSH keys. `ssh-keygen -y -P ''` exits 0 only on a key with no passphrase and
+#    never prompts — grepping "ENCRYPTED" instead would miss the new OpenSSH key format.
 if command -v ssh-keygen >/dev/null 2>&1; then
   _open=()
   for _k in "$HOME"/.ssh/*; do
@@ -27,9 +23,8 @@ if command -v ssh-keygen >/dev/null 2>&1; then
   (( ${#_open[@]} )) && audit+=("passphrase-less SSH private key(s) in ~/.ssh: ${_open[*]} — add a passphrase (ssh-keygen -p) or move to a hardware/agent-held key")
 fi
 
-# 2) Plaintext GitHub token on disk or in env. A classic PAT (ghp_) does NOT expire by default — the
-#    worst exfil prize; an OAuth token (gho_) is the gh-CLI equivalent. Match the PREFIX only; the
-#    matched value is never echoed.
+# 2) Plaintext GitHub token. A classic PAT (ghp_) does NOT expire by default — the worst exfil
+#    prize; gho_ is the gh-CLI equivalent. Prefix match only; the value is never echoed.
 _pat=0
 for _f in "$HOME/.git-credentials" "$HOME/.config/gh/hosts.yml"; do
   [[ -f "$_f" ]] && grep -Eq 'gh[po]_[A-Za-z0-9]{20,}' "$_f" 2>/dev/null && _pat=1
@@ -39,14 +34,13 @@ for _v in "${GH_TOKEN:-}" "${GITHUB_TOKEN:-}"; do
 done
 (( _pat )) && audit+=("plaintext GitHub token (classic ghp_/oauth gho_) in ~/.git-credentials, gh config, or env — prefer a fine-grained, expiring PAT or a credential helper")
 
-# 3) A .env in the working directory carrying a *recognizable* live credential (not merely KEY=…) —
-#    requiring a real token shape keeps this near-zero-FP versus flagging every .env placeholder.
+# 3) Requiring a real token SHAPE (not merely KEY=…) keeps this off every .env placeholder.
 if [[ -f "$PWD/.env" ]] && \
    grep -Eq '(AKIA[0-9A-Z]{16}|gh[posru]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)' "$PWD/.env" 2>/dev/null; then
   audit+=("plaintext .env in this repo holds a live-looking secret — inject from a secrets manager and keep .env out of git")
 fi
 
-(( ${#audit[@]} == 0 )) && exit 0   # clean => silent (no green line — doctor/CLAUDE.md)
+(( ${#audit[@]} == 0 )) && exit 0
 
 msg="🟡 [wormhook] exposure — ${#audit[@]} long-lived secret class(es) in worm-targeted paths (what gets exfiltrated if detection misses):"
 for _l in "${audit[@]}"; do msg+=$'\n  • '"$_l"; done

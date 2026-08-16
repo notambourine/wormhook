@@ -1,49 +1,36 @@
 #!/bin/bash
 # Tiered supply-chain malware scan. Runs on SessionStart, PreToolUse, PostToolUse,
-# UserPromptSubmit. Two events can hard-block: PreToolUse (permissionDecision:"deny")
-# and UserPromptSubmit (top-level decision:"block"); Session/Post can only warn. See the
-# Alert helper KEY-DECISION for the three distinct emission shapes.
+# UserPromptSubmit. PreToolUse and UserPromptSubmit can hard-block; the other two only warn
+# (see the alert() KEY-DECISION for the three emission shapes).
 #
-# NO NETWORK: every tier is a local filesystem/stat/grep operation. The install-time
-# *firewall* job (registry intelligence: typosquats, malicious-version blocking, age/
-# reputation) is deliberately ceded to Socket Firewall (sfw) + safedep/vet — doctor/firewall.sh
-# nudges you to install them. wormhook is the independent, local, near-zero-FP lock.
+# NO NETWORK: every tier is a local filesystem/stat/grep operation. Registry intelligence
+# (typosquats, malicious-version blocking, publish age) is ceded to Socket Firewall + vet.
 #
-# Two behaviors backstop the signature tiers where they're structurally blind:
-#   - Python execution gating: pip/uv/pipx/python on PreToolUse trigger the Tier-0
-#     .pth sweep BEFORE the interpreter auto-executes a poisoned site-packages startup hook.
-#   - UserPromptSubmit monitor: re-runs T0+T1 every human turn and can block —
-#     the hook layer's approximation of a continuous filesystem watcher. Silent when clean.
+# Two behaviors backstop the signature tiers where they are structurally blind: Python
+# execution gating runs the Tier-0 .pth sweep BEFORE an interpreter loads a poisoned
+# site-packages hook, and the UserPromptSubmit monitor re-runs T0+T1 every human turn.
 #
 # Sources:
 #   - Shai-Hulud 1.0 (Sep 2025): global['!']=X-YYYY fingerprint, crypto drainer
 #   - Shai-Hulud 2.0 (Nov 2025): self-replicating worm, GitHub exfil, 796 packages
 #   - Shai-Hulud 3.0 (Dec 2025): enhanced obfuscation, "Goldox-T3chs" marker, c0nt3nts.json
-#   - Mini Shai-Hulud (Apr-Jun 2026): cross-ecosystem (npm+PyPI), TanStack/SAP-CAP/AntV/
-#       TeamPCP, git-tanstack.com typosquat + Session-network exfil, AGENT-HIJACK persistence
-#       via .claude/.vscode setup.mjs + router_runtime.js + injected SessionStart hooks +
-#       .vscode/tasks.json "runOn":"folderOpen"; kitty-monitor LaunchAgent/systemd unit +
-#       ~/.local/share/kitty/cat.py daemon; ctf-scramble-v2 PBKDF2 salt, firedalazer /
-#       OhNoWhatsGoingOnWithGitHub C2 keywords, __DAEMONIZED guard, russian-locale kill-switch,
-#       audit.checkmarx.cx C2
+#   - Mini Shai-Hulud (Apr-Jun 2026): npm+PyPI; TanStack/SAP-CAP/AntV/TeamPCP; git-tanstack.com
+#       typosquat, AGENT-HIJACK via .claude/.vscode setup.mjs + router_runtime.js + injected
+#       SessionStart hooks + tasks.json "runOn":"folderOpen"; kitty-monitor unit + cat.py daemon;
+#       ctf-scramble-v2 salt, firedalazer / OhNoWhatsGoingOnWithGitHub C2, __DAEMONIZED guard,
+#       russian-locale kill-switch, audit.checkmarx.cx C2
 #   - SANDWORM_MODE (Feb 2026): AI toolchain poisoning, MCP injection, SSH propagation
 #   - Axios/plain-crypto-js (Mar 2026): Sapphire Sleet (DPRK) RAT via sfrclak.com C2
-#   - Hades/Miasma/Mini Shai-Hulud PyPI wave (Jun 2026): MCP-typosquat PyPI packages
-#       (openai-mcp, langchain-core-mcp, tiktoken-mcp, instructor-mcp, ...) ship a
-#       weaponized *.pth startup hook that downloads Bun + runs _index.js (Hades JS
-#       stealer); native import-time .abi3.so modules (ensmallen_haswell/core2) that
-#       execute on package import with no .pth; /tmp/.sshu-setup.js SSH propagation;
-#       thebeautiful{march,snads}oftime fallback C2-discovery strings. Targets
-#       bioinformatics + MCP developers.
-#   - AsyncAPI / Miasma RAT "miasma-train-p1" (Jul 2026): @asyncapi/{specs,generator,…}
-#       republished with an IMPORT-TIME loader (runs on require(), defeats --ignore-scripts);
-#       persists as NodeJS/sync.js + ~/.config/.miasma lock dir + miasma-monitor login unit;
-#       M-RED-TEAM v6.4 / _miasma._tcp payload markers, IPFS-staged second stage (2 CIDs)
-#   - ChainDrop / keyv-cacheable Shai-Hulud wave (Aug 2026): keyv@6.0.0 preinstall ->
-#       setup.mjs loader + math_init.js payload (SHA256 hash IOCs); C2 resolved at runtime
-#       from ETH contract 0xE1f2…3103 (the address is the on-disk constant; domains stay in
-#       the network layer); falls back to the thebeautiful{march,snads}oftime commit-search
-#       markers already covered above
+#   - Hades/Miasma PyPI wave (Jun 2026): MCP typosquats (openai-mcp, langchain-core-mcp,
+#       tiktoken-mcp, instructor-mcp) ship a *.pth hook that downloads Bun + runs _index.js;
+#       import-time .abi3.so modules (ensmallen_haswell/core2); /tmp/.sshu-setup.js SSH
+#       propagation; thebeautiful{march,snads}oftime C2-discovery strings
+#   - AsyncAPI / Miasma RAT "miasma-train-p1" (Jul 2026): IMPORT-TIME loader on require(),
+#       defeating --ignore-scripts; NodeJS/sync.js + ~/.config/.miasma + miasma-monitor unit;
+#       M-RED-TEAM v6.4 / _miasma._tcp markers, IPFS-staged second stage (2 CIDs)
+#   - ChainDrop / keyv-cacheable (Aug 2026): keyv@6.0.0 preinstall -> setup.mjs loader +
+#       math_init.js payload (hash IOCs); C2 resolved from ETH contract 0xE1f2…3103 (the
+#       address is the on-disk constant; domains stay in the network layer)
 #   - Remote-eval loader (recurring): atob(process.env.FAKE_KEY) -> fetch -> eval
 #   - CISA: https://www.cisa.gov/news-events/alerts/2025/09/23/widespread-supply-chain-compromise-impacting-npm-ecosystem
 #   - Datadog: https://securitylabs.datadoghq.com/articles/shai-hulud-2.0-npm-worm/
@@ -60,42 +47,33 @@
 #   - Microsoft (ChainDrop, Aug 2026): https://www.microsoft.com/en-us/security/blog/2026/08/04/chaindrop-supply-chain-compromise-anatomy-self-propagating-worm/
 #   - JFrog (ChainDrop, Aug 2026): https://research.jfrog.com/post/shai-hulud-is-back-august/
 #
-# KEY-DECISION 2026-06-01: tiered execution. Scanning node_modules costs ~4-27s on a
-# large repo (8600 files) but it only changes on install; the source/persistence scans
-# cost ~26ms but the threat changes constantly (every edit/pull/agent launch). So:
-#   Tier 0 (persistence + agent-hook-injection): cheap stats, ALWAYS run, NEVER cached.
-#   Tier 1 (project source + package.json lifecycle): cheap, run on every gated event.
-#   Tier 2 (node_modules content/IOC scan): expensive, run only when deps changed
-#           (install-class PostToolUse, or SessionStart with a stale cache marker).
-# A poisoned ~/.claude hook re-runs on every launch, so Tier 0 must outrank the cache.
-# Tier 0's pure path-existence IOCs (the known-bad files/dirs whose mere presence means a
-# payload already ran) are NOT hardcoded here — they live in the WORMHOOK_PERSIST_* parallel
-# arrays in malware-patterns.sh (single source of truth); _persist_scan below is just the
-# iterator. The content/behavioral persistence checks (.pth, .abi3.so, git-hook bodies,
-# agent-config injection) stay inline because they inspect file CONTENTS, not just existence.
+# KEY-DECISION 2026-06-01: tiered execution. node_modules costs ~4-27s on a large repo but
+# only changes on install; the source/persistence scans cost ~26ms yet the threat moves on
+# every edit, pull, and agent launch. So:
+#   Tier 0 (persistence + agent-hook injection): cheap stats, ALWAYS run, NEVER cached —
+#           a poisoned ~/.claude hook re-runs every launch, so it must outrank the cache.
+#   Tier 1 (project source + package.json lifecycle): cheap, every gated event.
+#   Tier 2 (node_modules content/IOC scan): expensive, only when deps changed.
+# Tier 0's pure path-existence IOCs live in the WORMHOOK_PERSIST_* arrays in
+# malware-patterns.sh; _persist_scan below is the iterator. The content/behavioral
+# persistence checks stay inline because they inspect file CONTENTS, not just existence.
 
 set -uo pipefail
 
 command -v jq &>/dev/null || { echo "Error: jq required" >&2; exit 1; }
 
-# Scan-runtime stamp for the SessionStart status line (see the "(x.xs)" suffix below). Captured
-# here — jq just confirmed present — so it spans the whole scan (signature load + payload parse +
-# tiers). bash 3.2 has no $EPOCHREALTIME and BSD `date` no %N, so `jq -n now` is the sub-second
-# clock; printf %.1f formats it. Used only on the session_start status line, so the blocking
-# pre_tool/prompt_submit paths pay nothing.
+# bash 3.2 has no $EPOCHREALTIME and BSD `date` no %N, so `jq -n now` is the sub-second clock.
+# Stamped here, right after the jq check, so it spans the whole scan.
 WH_T0=$(jq -n now 2>/dev/null) || WH_T0=""
 
-# Malware signatures: single source of truth, bundled alongside this hook so a
-# pattern added once reaches every scan tier. Resolve relative to this script's own
-# dir — works regardless of where the plugin is installed (don't depend on $HOME).
+# Resolve signatures relative to this script's own dir, so the plugin works wherever it installs.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MALWARE_PATTERNS="$SCRIPT_DIR/malware-patterns.sh"
 # shellcheck source=/dev/null
 [[ -r "$MALWARE_PATTERNS" ]] && source "$MALWARE_PATTERNS"
 if [[ -z "${MALWARE_INJECT_RE:-}" || -z "${MALWARE_CONTENT_RE:-}" ]]; then
-  # Fail loud but open: a missing config file is an install fault, not a malware
-  # event — don't brick every npm/node command over it. systemMessage (not bare
-  # stderr) so the degraded state is visible to the USER, not just debug logs.
+  # Fail loud but open: a missing signature file is an install fault, not a malware event,
+  # so it must not brick every npm/node command. systemMessage, so the USER sees the degradation.
   echo "wormhook: signatures unavailable ($MALWARE_PATTERNS) — skipping scan" >&2
   jq -nc --arg msg "🟡 [wormhook] signatures unavailable ($MALWARE_PATTERNS) — scan SKIPPED. Reinstall the plugin." '{systemMessage: $msg}'
   exit 0
@@ -105,48 +83,31 @@ PAYLOAD=$(cat)
 COMMAND=$(echo "$PAYLOAD" | jq -r '.tool_input.command // ""')
 CWD=$(echo "$PAYLOAD" | jq -r '.cwd // ""')
 EVENT=$(echo "$PAYLOAD" | jq -r '.hook_event_name // ""')
-# Back-compat: older configs may not send hook_event_name — infer from command presence.
+# Back-compat: an older config may not send hook_event_name — infer it from command presence.
 [[ -z "$EVENT" ]] && { [[ -n "$COMMAND" ]] && EVENT="PreToolUse" || EVENT="SessionStart"; }
 
 NODE_MODULES="${CWD}/node_modules"
 
-# Command classes. GATE = the npm/node commands we care about at all; INSTALL = the
-# subset that mutates node_modules (the only thing that can introduce a new dep IOC).
-# Keep these in sync with the `if` globs in hooks/hooks.json (`if` ⊇ regex) — see the
-# "Two sources of truth" note in CLAUDE.md. The regexes are matched per SUBCOMMAND
-# (see the decomposition below), not against the raw command string: Claude Code's
-# `if` filter checks each subcommand of a compound command and strips leading
-# VAR=value assignments, so `cd sub && npm install` and `CI=1 npm install` reach
-# this script — the old whole-string `^` match dropped both on the floor with no
-# signal (issue #56). `^\s*` now anchors the start of a stripped segment.
+# GATE = npm/node commands worth a scan; INSTALL = the node_modules-mutating subset. `if` ⊇ regex
+# vs hooks.json (CLAUDE.md). Per-SUBCOMMAND: a whole-string `^` dropped `cd x && npm i` (#56).
 GATE_RE='^\s*(npm (ci|install|i|add|run|test|exec)|pnpm (install|i|add|run|exec|dlx)|yarn( (install|add|run))?|bun (install|add|i|run|x)|npx|node)(\s|$)'
 INSTALL_RE='^\s*(npm (ci|install|i|add)|pnpm (install|i|add)|yarn( (install|add))?|bun (install|add|i))(\s|$)'
-# GIT = working-tree-rewriting git ops. pull/merge/checkout/switch/rebase land new
-# source — including .pth/.claude persistence and package.json lifecycle scripts —
-# with no npm involved, so they need a Tier 0+1 sweep too. PostToolUse only: pre-op
-# the new files don't exist yet (see the case below). Tolerate a leading `-C <dir>`.
+# GIT ops land new source — .pth/.claude persistence, lifecycle scripts — with no npm
+# involved. PostToolUse only: pre-op the new files do not exist yet.
 GIT_RE='^\s*git\s+(-C\s+\S+\s+)?(pull|merge|checkout|switch|rebase)(\s|$)'
-# PYGATE = Python interpreters/installers. They don't touch node_modules, but Python
-# AUTO-EXECUTES a site-packages *.pth on every interpreter start (the Hades/Miasma PyPI
-# vector) — so any of these must trigger a PreToolUse Tier-0 sweep so the .pth check runs
-# BEFORE the interpreter loads it. PYINSTALL = the subset that mutates site-packages (a
-# fresh .pth can land), warranting a PostToolUse re-scan. `make`/`./` deliberately NOT
-# gated: too broad, no matching signatures, pure FP/latency tax. Keep `if` ⊇ regex.
+# Python AUTO-EXECUTES a site-packages *.pth at interpreter start, so PYGATE must fire the Tier-0
+# sweep first; PYINSTALL is the mutating subset. `make`/`./` stay ungated: no signatures, FP tax.
 PYGATE_RE='^\s*(pip|pip3|pipx|uv|python|python3)(\s|$)'
 PYINSTALL_RE='^\s*((pip|pip3|pipx)\s+install|uv\s+(add|sync|(pip\s+install)))(\s|$)'
 
-# ── Subcommand decomposition (issue #56) ──────────────────────────────────────
-# One segment per line: split at [;&|]+ (covers &&, ||, ;, |, & and |&), then strip
-# leading VAR=value assignments and a bare `env` prefix from each segment. Over-
-# splitting inside a quoted string is accepted: a spurious segment can only ADD a
-# scan (fails toward scanning) — a block still requires an actual finding.
+# Subcommand decomposition (#56). Over-splitting inside a quoted string is accepted: a spurious
+# segment can only ADD a scan, and a block still needs a real finding.
 WH_SUBCMDS=""
 [[ -n "$COMMAND" ]] && WH_SUBCMDS=$(printf '%s\n' "$COMMAND" \
   | awk '{ gsub(/[;&|]+/, "\n"); print }' \
   | sed -E 's/^[[:space:]]*((env|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*)[[:space:]]+)*//')
-# Class-matching copy with the dir-option pairs deleted, so `npm --prefix X install`
-# / `yarn --cwd X install` / `pnpm -C X add` match the verb-adjacent class regexes
-# unchanged. The RAW segments keep the option — target derivation reads it below.
+# Deleting the dir-option pairs lets `npm --prefix X install` match the verb-adjacent class
+# regexes unchanged. The RAW segments keep the option — target derivation reads it below.
 WH_DIROPT_STRIP='s/[[:space:]](--prefix|--cwd|--dir|-C)[= ][^[:space:]]+//g'
 WH_SUBCMDS_N=""
 [[ -n "$WH_SUBCMDS" ]] && WH_SUBCMDS_N=$(printf '%s\n' "$WH_SUBCMDS" | sed -E "$WH_DIROPT_STRIP")
@@ -154,17 +115,12 @@ _cmd_class() {  # 0 => some subcommand matches the class regex in $1
   [[ -n "$WH_SUBCMDS_N" ]] && printf '%s\n' "$WH_SUBCMDS_N" | grep -qE "$1"
 }
 
-# ── Target-dir derivation (issue #57) ─────────────────────────────────────────
-# Tier 1 must read the manifest the command operates on, not blindly $CWD:
-# `cd packages/api && npm install` runs its lifecycle scripts in packages/api while
-# the session cwd stays at the root. Walk the segments tracking a virtual cwd
-# through `cd`, and honour --prefix (npm), --cwd (yarn), --dir (pnpm), -C (pnpm/git)
-# on a gated segment. Anything unresolvable falls back to $CWD — the pre-#57
-# behavior, never less coverage. $CWD is always first in the set.
+# Target-dir derivation (#57). `cd packages/api && npm install` runs its lifecycle scripts there
+# while the session cwd stays at the root, so Tier 1 tracks a virtual cwd; unresolvable => $CWD.
 TARGET_DIRS=("$CWD")
 _add_target() { local d; for d in "${TARGET_DIRS[@]}"; do [[ "$d" == "$1" ]] && return 0; done; TARGET_DIRS+=("$1"); }
 _resolve_dir() {  # $1 = path token  $2 = base dir -> absolute path (not canonicalized)
-  # shellcheck disable=SC2088  # the "~"* arms match a LITERAL leading tilde in the token, then expand it ourselves
+  # shellcheck disable=SC2088  # the "~"* arms match a LITERAL tilde, expanded here on purpose
   case "$1" in
     /*)        printf '%s' "$1" ;;
     "~"|"~/"*) printf '%s%s' "$HOME" "${1#\~}" ;;
@@ -192,56 +148,22 @@ if [[ -n "$WH_SUBCMDS" ]]; then
   done <<<"$WH_SUBCMDS"
 fi
 
-# ── Fast content greps: ripgrep when available ────────────────────────────────
-# KEY-DECISION 2026-06-06: the two content scans (Tier 1 project source, Tier 2
-# node_modules fingerprints) prefer rg over grep. Measured on a 58k-file
-# node_modules: BSD grep 30.3s single-core (blows the 20s Tier-2 ceiling => a
-# permanent 🟡 on every deps change), rg 0.7s parallel — 43x. Verdict parity
-# verified per-pattern (7/7 IOC strings agree) and per-traversal (hidden files,
-# depth, exclusion globs). rg needs --no-ignore --hidden for grep-equivalent
-# coverage (else malware hides behind a .gitignore it ships itself) and -a so
-# NUL-byte padding can't get a file classified binary and skipped. Each pattern
-# is compile-gated at runtime: a future signature using grep-only syntax falls
-# back to grep for that scan rather than mis-parse — degradation fails toward
-# scanning, never away from it.
+# KEY-DECISION 2026-06-06: prefer rg — BSD grep takes 30.3s on a 58k-file node_modules vs rg 0.7s.
+# --no-ignore --hidden (else malware hides behind its own .gitignore), -a (NUL padding != binary).
 RG_BIN=$(command -v rg || true)
-_rg_ok() {  # 0 => rg exists and compiles this pattern
+_rg_ok() {  # 0 => rg compiles this pattern; a grep-only signature falls back, never mis-parses
   [[ -n "$RG_BIN" ]] || return 1
   printf '' | "$RG_BIN" -q -e "$1" 2>/dev/null
   [[ $? -ne 2 ]]
 }
 
-# ── Scan-cache (Tier 2 only) ──────────────────────────────────────────────────
-# Marker stores a key = lockfile hash + node_modules dir-tree mtime (depth ≤2).
-# Match => deps unchanged since the last CLEAN scan => skip the expensive walk.
-# A fresh-enough marker, that is: the key is blind to an in-place OVERWRITE of an
-# existing node_modules file (a dir mtime moves on create/delete/rename, never on
-# a write; no install ran, so the lockfile is untouched) — exactly how Shai-Hulud
-# 2.0 spreads between repos on one machine (issue #55). The marker is rewritten
-# after every clean full walk, so its mtime IS the last-scan time; deps_changed
-# ages it out (default 24h, WORMHOOK_T2_TTL_HOURS) to bound that blind window
-# instead of folding a per-file signal into the key, which would cost the very
-# walk the cache exists to avoid. Derived state, never synced.
+# Tier-2 cache key = lockfile hash + node_modules dir-tree mtime, so it is blind to an in-place
+# OVERWRITE — exactly how Shai-Hulud 2.0 spreads locally (#55). deps_changed ages it out instead.
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/notambourine/malware-scan"
 MARKER="$CACHE_DIR/$(printf '%s' "$CWD" | shasum -a 256 | awk '{print $1}')"
 _tree_mtime() {
-  # Max mtime over node_modules itself + dirs ≤2 levels deep. Creating/removing
-  # a file bumps its PARENT dir's mtime, so depth-2 dir mtimes catch a payload
-  # planted up to 3 levels in (pkg roots, @scope/pkg roots — where the known IOC
-  # payload files live). Root-only mtime missed anything below the top level: a
-  # hand-planted node_modules/<pkg>/payload between installs rode the clean
-  # cache until the lockfile changed. Empty/timeout output => 0 => key mismatch
-  # => Tier 2 re-scans (degradation fails toward scanning, never away from it).
-  #
-  # Build-tool scratch dirs (.cache: prettier/babel/eslint; .vite: dev-server
-  # optimizer) are pruned from the KEY ONLY: they churn on every format/build,
-  # invalidating the clean-scan marker daily for repos whose deps never changed.
-  # ACCEPTED GAP: a payload planted inside a pruned dir is key-invisible — Tier 2
-  # only re-walks it when the lockfile or a tracked dir changes, or when the
-  # marker TTL expires (see deps_changed). Accepted because these dirs are
-  # tool-managed scratch, not require()d code paths, and the alternative was a
-  # daily false re-scan. NOTE: creating/removing the pruned dir itself still
-  # bumps node_modules' root mtime; only churn INSIDE these dirs is hidden.
+  # Depth 2, because creating a file bumps its PARENT dir's mtime: that reaches a payload 3 levels
+  # in. ACCEPTED GAP: .cache/.vite are pruned from the key, so churn inside them hides until TTL.
   local statv=(stat -c %Y)                       # GNU
   stat -f %m "$NODE_MODULES" &>/dev/null && statv=(stat -f %m)  # BSD/macOS
   local m
@@ -265,22 +187,17 @@ deps_changed() {            # 0 = changed/never-scanned/expired (=> scan); 1 = u
   [[ "$saved" == "$(_scan_key)" ]] && return 1 || return 0
 }
 
-# ── Execution plan from the event ─────────────────────────────────────────────
-MODE=session_start          # alert() blocks only in pre_tool mode
+MODE=session_start          # alert() blocks only in pre_tool / prompt_submit mode
 RUN_T1=0 RUN_T2=0 UPDATE_CACHE=0
 case "$EVENT" in
   PreToolUse)
     MODE=pre_tool
     if _cmd_class "$GATE_RE"; then
       RUN_T1=1
-      # install-class: the package.json lifecycle gate (Tier 1) is the pre-execution
-      # check that matters; the heavy node_modules walk is the OLD state, low value —
-      # PostToolUse re-scans the fresh tree. exec-class: scan only if deps drifted.
+      # On install-class the node_modules walk would read the OLD tree; PostToolUse rescans it.
       _cmd_class "$INSTALL_RE" || { deps_changed && { RUN_T2=1; UPDATE_CACHE=1; }; }
     elif _cmd_class "$PYGATE_RE"; then
-      # Python interpreter/installer: Tier 0 (always) is the .pth gate we need pre-exec;
-      # add Tier 1. NEVER Tier 2 (node_modules irrelevant).
-      RUN_T1=1
+      RUN_T1=1                                           # T0's .pth gate is the point; T2 is n/a
     else
       exit 0                                             # not a command we gate
     fi
@@ -290,24 +207,19 @@ case "$EVENT" in
     if _cmd_class "$INSTALL_RE"; then
       RUN_T1=1; RUN_T2=1; UPDATE_CACHE=1                # fresh deps => full scan + refresh
     elif _cmd_class "$GIT_RE"; then
-      # git just rewrote the working tree: new source + lifecycle scripts + .pth/.claude
-      # persistence can all arrive with no install. Tier 0 always runs; add Tier 1, and
-      # Tier 2 only if the dep fingerprint drifted (e.g. the pull moved package-lock.json).
+      # git rewrote the tree: source, lifecycle scripts, and .pth/.claude persistence can all
+      # arrive with no install. T2 only if the dep fingerprint drifted with it.
       RUN_T1=1
       deps_changed && { RUN_T2=1; UPDATE_CACHE=1; }
     elif _cmd_class "$PYINSTALL_RE"; then
-      # pip/uv install just landed: a malicious *.pth can be freshly written into
-      # site-packages. Re-run Tier 0 (the .pth gate) + Tier 1; node_modules is untouched.
-      RUN_T1=1
+      RUN_T1=1                                           # a fresh .pth can have just landed
     else
       exit 0                                             # not install-, git-, nor pyinstall-class
     fi
     ;;
   UserPromptSubmit)
-    # Continuous monitor: re-run the cheap, fast-changing tiers at every human turn and —
-    # unlike SessionStart — BLOCK on a finding. T0 (always) + T1 only; NEVER T2 (node_modules
-    # changes only on install, already gated) keeps this ~26ms/turn. No command on a UPS
-    # payload => COMMAND="" => the ${COMMAND:+…} alert interpolations omit cleanly.
+    # Continuous monitor: cheap tiers every human turn, and unlike SessionStart it can BLOCK.
+    # Never T2, which keeps the turn at ~26ms. A UPS payload carries no command => COMMAND="".
     MODE=prompt_submit; RUN_T1=1; RUN_T2=0
     ;;
   *)  # SessionStart (or unknown): cheap tiers always; heavy tier only on cache miss
@@ -316,55 +228,27 @@ case "$EVENT" in
     ;;
 esac
 
-# ── Alert helper ──────────────────────────────────────────────────────────────
-# THREE delivery shapes, by event (see KEY-DECISION below). The block-event schemas are
-# NOT interchangeable — PreToolUse nests its decision; UserPromptSubmit puts it top-level:
-#   PreToolUse:               hookSpecificOutput.permissionDecision:"deny" (hard block) +
-#                             `systemMessage` (loud, shown to the USER at block time) +
-#                             permissionDecisionReason (instructs the model) — one exit-0 JSON.
-#   UserPromptSubmit:         top-level decision:"block" (hard block) + `systemMessage` (USER) +
-#                             `reason` (model). decision is MUTUALLY EXCLUSIVE with
-#                             hookSpecificOutput.additionalContext on UPS, so neither is emitted.
-#   SessionStart/PostToolUse: accumulate, then emit `systemMessage` (loud, shown to
-#                             the USER) + `additionalContext` (instructs the model).
-# KEY-DECISION 2026-06-01: SessionStart CANNOT abort the session — Claude Code has no
-# continue:false / decision:block for it (confirmed via hooks docs), and exit 2 there
-# just dumps stderr and proceeds. So "refuse to boot" is impossible; the strongest we
-# get is (1) a clean `systemMessage` warning to the human at startup, and (2) the
-# hard block on the actual npm/node command.
-# KEY-DECISION 2026-06-01 (rev): PreToolUse blocks via permissionDecision:"deny", NOT
-# exit 2. Both are documented hard blocks (verified against the hooks docs — exit-2 is
-# not "the only" block), but exit-2 routes its alert to STDERR, which Claude Code shows
-# to the MODEL only — so the user never saw the 🚨 at block time unless the model chose
-# to relay it. The deny+systemMessage form blocks the command AND surfaces the alert to
-# the human directly AND feeds the model a refuse-to-work-around reason — all three,
-# which exit-2 cannot. Earlier we relied on additionalContext/stderr alone — that only
-# talks to the model and reads as a soft flag; bare stderr+exit 0 is invisible in the TUI
-# (the "silent for a month" bug). A broad all-Bash exit-2 quarantine was rejected: the
-# remediation steps below are themselves Bash, so it would lock the user out of fixing
-# the machine.
+# alert() emits three non-interchangeable shapes keyed on MODE; CLAUDE.md, "Dispatch model",
+# holds that schema contract, and the per-branch notes below hold only what it cannot say.
+
+# KEY-DECISION 2026-06-01: SessionStart CANNOT abort a session — there is no continue:false for
+# it, and exit 2 just dumps stderr and proceeds. A startup warning is the strongest it gets.
+
+# KEY-DECISION 2026-06-01 (rev): PreToolUse denies via permissionDecision, never exit 2 — exit 2
+# routes the alert to stderr, which reaches the MODEL only, so the user never saw the block.
 ALERTS="" SUMMARY=""
-# Machine-readable findings (NDJSON, one {title,body} per alert), slurped into the
-# `findings` array on the SessionStart/PostToolUse verdict. This is the structured
-# contract the out-of-band CLI consumes instead of screen-scraping ALERTS/SUMMARY —
-# rewording a banner no longer silently breaks the adapter's parsing/dedup.
+
+# NDJSON findings are the structured contract the out-of-band CLI consumes, so rewording a
+# banner cannot silently break its parsing and dedup.
 FINDINGS=""
-# Degraded-but-not-infected conditions (scan timeouts etc). A run with warnings
-# reports 🟡 instead of 🟢 and never refreshes the clean-scan cache — a truncated
-# scan is not a clean scan.
+
+# A degraded run (scan timeout) reports 🟡 and never refreshes the cache: a truncated scan is
+# not a clean scan.
 WARNINGS=""
 warn() { WARNINGS="${WARNINGS:+$WARNINGS; }$1"; }
 
-# ── Opt-in quarantine (issue #59) ─────────────────────────────────────────────
-# WORMHOOK_QUARANTINE=1 (settings.json `env`, or exported for the CLI/launchd sweep)
-# renames an EXACT-MATCH persistence artifact to <path>.wormhook-quarantined.<epoch>
-# + chmod 000 — reversible, forensics-preserving, and stops a .pth/LaunchAgent/dropper
-# firing again. Deliberately NOT kill/unload/delete (containment would invert the
-# fail-open bias; cutting a live process is the network layer / human's job), and
-# deliberately scoped to exact-match IOCs only (the WORMHOOK_PERSIST_* path table,
-# known-bad .pth name/hash, known-bad .abi3.so basenames) — behavioral matches stay
-# report-only per the FP-tolerance invariant. Fail open: a failed rename (root-owned
-# artifact, RO fs) degrades to the normal advisory alert with a note. Default off.
+# Opt-in quarantine (#59): rename + chmod 000, never kill/unload/delete — containment would
+# invert the fail-open bias. Exact-match IOCs only; a behavioral match stays report-only.
 WORMHOOK_QUARANTINE="${WORMHOOK_QUARANTINE:-}"
 QUARANTINE_LOG="$CACHE_DIR/quarantine.log"
 WH_QUAR_NOTE=""
@@ -398,10 +282,7 @@ EOF
   SUMMARY="${SUMMARY}• ${1}"$'\n'
   FINDINGS="${FINDINGS}$(jq -nc --arg t "$1" --arg b "$2" '{title:$t,body:$b}')"$'\n'
   if [[ "$MODE" == "pre_tool" ]]; then
-    # Hard block on the actual npm/node command. permissionDecision:"deny" blocks it;
-    # systemMessage shows the 🚨 to the USER directly at block time (exit-2's stderr
-    # would reach the model only); permissionDecisionReason tells the model to state the
-    # block plainly and not work around it. One exit-0 emission, all three channels.
+    # One exit-0 emission carries all three channels: the deny, the user's 🚨, the model's reason.
     jq -n --arg title "$1" --arg body "$2" '{
       systemMessage: ("🚨 wormhook BLOCKED this command — supply-chain IOC detected:\n" + $title + "\n\n" + $body),
       hookSpecificOutput: {
@@ -412,11 +293,8 @@ EOF
     }'
     exit 0
   elif [[ "$MODE" == "prompt_submit" ]]; then
-    # UserPromptSubmit hard block. The UPS schema differs from PreToolUse: the decision is
-    # a TOP-LEVEL "block" (not nested permissionDecision), and `decision` is MUTUALLY
-    # EXCLUSIVE with hookSpecificOutput.additionalContext — so we emit neither additionalContext
-    # nor hookSpecificOutput. `reason` reaches the MODEL (refuse-to-proceed); `systemMessage`
-    # reaches the USER (the 🚨). One exit-0 emission. (Verified against code.claude.com/docs/en/hooks.)
+    # UPS puts the decision TOP-LEVEL, and `decision` is MUTUALLY EXCLUSIVE with
+    # hookSpecificOutput.additionalContext, so neither that nor hookSpecificOutput is emitted.
     jq -n --arg title "$1" --arg body "$2" '{
       decision: "block",
       reason: ("[wormhook] Blocked this turn: " + $title + ". State this block to the user plainly and do NOT proceed or work around it until the user confirms the machine is clean.\n" + $body),
@@ -429,18 +307,11 @@ _in_list() { local n="$1"; shift; local x; for x in "$@"; do [[ "$x" == "$n" ]] 
 
 # ══ TIER 0: persistence + agent-hook injection — cheap stats, ALWAYS, NEVER cached ══
 
-# Shared frame for the pure path-existence persistence alerts (the WORMHOOK_PERSIST_* table
-# groups). Each campaign supplies only its verbatim TITLE, a LEAD ("Found … at: <path>" plus a
-# one/two-line explanation), and a numbered STEPS block; this builder wraps them in the common
-# skeleton — the self-omitting "Command blocked: <cmd>" line (empty on command-less events such
-# as SessionStart/UserPromptSubmit) and the "Immediate steps:" header. Collapses six
-# near-identical alert+heredoc frames to one call each, so a change to the skeleton is a single
-# edit. The bespoke config-injection / git-hook / .pth / .so bodies below do NOT use this (their
-# structure differs — no uniform "Found path → steps" shape) and stay inline.
-#   bash 3.2 note: the builder owns the ONLY heredoc here, and its literal text has no
-#   apostrophe, so the $(cat <<BODY) command-substitution gotcha cannot trip. The per-campaign
-#   LEAD/STEPS arrive as ordinary double-quoted args (apostrophes + balanced quotes are data,
-#   never parsed), so the verbatim remediation text needs no apostrophe gymnastics.
+# Shared frame for the path-existence persistence alerts, so a skeleton change is one edit. The
+# bespoke bodies below have no uniform "found path -> steps" shape and stay inline.
+
+# bash 3.2: this heredoc's literal text has no apostrophe, so the $(cat <<BODY) parser gotcha
+# cannot trip. LEAD/STEPS arrive as double-quoted args, where an apostrophe is plain data.
 persistence_check() {  # $1=title  $2=lead  $3=numbered-steps
   alert "$1" "$(cat <<BODY
 $2
@@ -453,21 +324,14 @@ BODY
 )"
 }
 
-# Persistence-path IOC table driver. The WORMHOOK_PERSIST_* parallel arrays (single
-# source of truth in malware-patterns.sh) hold the pure path-EXISTENCE IOCs — a file/dir
-# whose mere presence means a payload already ran. _persist_scan takes a list of group
-# INDICES, and for each group finds the FIRST member path that exists (after substituting
-# the __HOME__/__CWD__ placeholders) into WH_PERSIST_HIT, then `case`s on the group key to
-# emit that group's verbatim alert via persistence_check. Indices are passed (not a blanket
-# loop) so the table checks fire in their HISTORICAL order, interleaved with the inline
-# content-based checks (agent-config / git-hook scans) that sit between them — preserving order.
+# Driver over the WORMHOOK_PERSIST_* table, whose rows are path-EXISTENCE IOCs. Callers pass
+# INDICES, so the table checks stay interleaved with the inline content checks, in order.
 WH_PERSIST_HIT=""
 _persist_scan() {
   local _i _op _path _candidates _c
   for _i in "$@"; do
     _op="${WORMHOOK_PERSIST_TEST[$_i]}"
-    # Word-split the space-separated path list (no path contains a space) after
-    # expanding the placeholders. Safe under set -u: an empty element cannot occur.
+    # Word-split is safe: no table path contains a space, and no element can be empty.
     _candidates="${WORMHOOK_PERSIST_PATHS[$_i]}"
     _candidates="${_candidates//__HOME__/$HOME}"
     _candidates="${_candidates//__CWD__/$CWD}"
@@ -479,9 +343,8 @@ _persist_scan() {
       fi
     done
     [[ -z "$WH_PERSIST_HIT" ]] && continue
-    # Every table row is a pure path-existence IOC (exact match by construction), so
-    # each hit is quarantine-eligible. If a group has FURTHER un-hit member paths,
-    # the next scan quarantines the next one — self-converging, one hit per run.
+    # Every row is exact-match by construction, so every hit is quarantine-eligible. A group
+    # with further member paths converges over runs: one quarantine per scan.
     _quarantine "$WH_PERSIST_HIT"
     case "${WORMHOOK_PERSIST_KEYS[$_i]}" in
       axios_rat)
@@ -504,9 +367,8 @@ This directory contains a malicious GitHub Actions runner used for credential ex
   4. Check: ps aux | grep actions-runner"
         ;;
       agent_hijack)
-        # Agent-hijack dropper FILES (Mini Shai-Hulud). A poisoned file in ~/.claude/
-        # re-runs on every launch and, if that dir is synced across machines, would
-        # PROPAGATE — so the table checks both $HOME and the project dir.
+        # A poisoned ~/.claude file re-runs every launch and PROPAGATES if that dir is synced,
+        # so the table covers both $HOME and the project dir.
         persistence_check "AGENT-HIJACK PERSISTENCE DETECTED" \
           "Found Mini Shai-Hulud agent-hijack dropper: $WH_PERSIST_HIT
 This installs into an AI-agent/editor config dir and wires a SessionStart hook so
@@ -520,7 +382,6 @@ the credential-stealer re-runs on every Claude Code / VS Code launch." \
   5. git log --all --since=\"2026-04-01\" for unexpected commits / impersonation"
         ;;
       gh_token_monitor)
-        # gh-token-monitor persistence (LaunchAgent / systemd user unit).
         persistence_check "GH-TOKEN-MONITOR PERSISTENCE DETECTED" \
           "Found Shai-Hulud token-monitor persistence unit: $WH_PERSIST_HIT
 This re-launches a GitHub-token harvester on login." \
@@ -530,12 +391,8 @@ This re-launches a GitHub-token harvester on login." \
   3. Check: ps aux | grep -i gh-token"
         ;;
       kitty_monitor)
-        # kitty-monitor persistence (AntV/TeamPCP wave). A background daemon (cat.py)
-        # is installed under ~/.local/share/kitty/ and registered as a login-persistent
-        # unit — a LaunchAgent on macOS, a systemd user service on Linux — that polls the
-        # GitHub commit-search API hourly for attacker commands. Same class as
-        # gh-token-monitor above; the unit names and the cat.py path are campaign-specific
-        # (Snyk AntV, verbatim).
+        # Unit names and the cat.py path are campaign-specific, taken verbatim from Snyk's AntV
+        # write-up. Same class as gh_token_monitor above.
         persistence_check "KITTY-MONITOR PERSISTENCE DETECTED" \
           "Found AntV/TeamPCP-wave persistence artifact: $WH_PERSIST_HIT
 This installs a background daemon (~/.local/share/kitty/cat.py) that polls the GitHub
@@ -550,8 +407,6 @@ ALREADY run on this machine." \
   5. git log --all --since=\"2026-04-01\" for unexpected commits / impersonation"
         ;;
       hades_ssh)
-        # Hades/Miasma SSH-propagation dropper (PyPI wave). The JS stealer writes this
-        # to spread over SSH to other hosts — its presence means the payload already ran.
         persistence_check "HADES SSH-PROPAGATION DROPPER DETECTED" \
           "Found Hades/Miasma SSH-propagation dropper at: /tmp/.sshu-setup.js
 This is written by the Bun-staged JS stealer to spread over SSH to other hosts —
@@ -563,8 +418,8 @@ its presence means the payload has ALREADY run on this machine." \
   5. Inspect site-packages *.pth startup hooks (the PyPI delivery vector)"
         ;;
       miasma_rat)
-        # Miasma RAT (AsyncAPI "miasma-train-p1"). The macOS drop path holds a space, so
-        # the table cannot list it; the cross-platform .miasma lock dir fires there instead.
+        # The macOS drop path holds a space, so the table cannot list it; the cross-platform
+        # .miasma lock dir is what fires there.
         persistence_check "MIASMA RAT PERSISTENCE DETECTED" \
           "Found Miasma RAT persistence artifact: $WH_PERSIST_HIT
 The AsyncAPI compromise (miasma-train-p1) runs at module IMPORT (no lifecycle script)
@@ -581,23 +436,10 @@ means the payload has ALREADY run on this machine." \
   done
 }
 
-# Indices 0-2: axios_rat, shai_hulud_2, agent_hijack — fire BEFORE the inline
-# agent-config / git-hook content scans below (preserves historical alert order).
-_persist_scan 0 1 2
+_persist_scan 0 1 2   # axios_rat, shai_hulud_2, agent_hijack
 
-# Agent-config injection CHAIN: the dropper wires itself into an AI-agent/editor
-# config so it re-runs on launch — as a SessionStart hook (Mini Shai-Hulud) OR a
-# rogue MCP server entry (SANDWORM_MODE) OR a VS Code task with "runOn":"folderOpen"
-# (SAP-CAP/AntV wave: the task re-runs `node .claude/setup.mjs` on every project open).
-# Detecting the WIRED entry (not just the file) catches the case where the dropper ran
-# once, injected the config, then deleted its on-disk file. Schemas differ across tools,
-# so scan EVERY string value. Two pattern classes flag: a known dropper token (e.g. a
-# folderOpen task referencing setup.mjs) OR the file-LESS inline form — a hook/MCP entry
-# whose command IS a remote-script-to-shell pipe (curl … | sh), which names no dropper
-# file. MALWARE_REMOTE_EXEC_RE is shared with the git-hook scan below: same injected-
-# command threat, so the same block-safe behavioral marker applies to both surfaces.
-# Project-relative configs are checked in EVERY target dir (TARGET_DIRS[0] is $CWD;
-# a `cd`/--prefix form adds the dir the command actually operates on — issue #57).
+# Agent-config injection. Matching the WIRED entry, not just the dropper file, still catches a
+# dropper that injected the config and then deleted itself. Schemas differ, so scan every string.
 cfg_list=(
   "${HOME}/.claude/settings.json" "${HOME}/.cursor/mcp.json"
   "${HOME}/.continue/config.json" "${HOME}/.windsurf/mcp.json"
@@ -608,11 +450,8 @@ for _t in "${TARGET_DIRS[@]}"; do
 done
 for cfg in "${cfg_list[@]}"; do
   [[ -f "$cfg" ]] || continue
-  # del(.permissions): permission allow/deny rules legitimately carry behavioral
-  # patterns (e.g. a `Bash(curl * | bash*)` DENY rule the user added for safety),
-  # which would FP on MALWARE_REMOTE_EXEC_RE. They are user security POLICY, never the
-  # executable wiring a dropper hijacks — the dropper injects .hooks/.mcpServers/tasks,
-  # all of which survive the del. (No-op on the non-Claude configs without .permissions.)
+  # del(.permissions): a user's own `Bash(curl * | bash*)` DENY rule would FP on
+  # MALWARE_REMOTE_EXEC_RE. It is security POLICY, never the wiring a dropper hijacks.
   cfg_hit=$(jq -r 'del(.permissions) | [.. | strings] | .[]' "$cfg" 2>/dev/null \
     | grep -iE "$MALWARE_DROPPER_TOKENS_RE|$MALWARE_REMOTE_EXEC_RE" | head -1)
   [[ -z "$cfg_hit" ]] && continue
@@ -636,15 +475,8 @@ BODY
 )"
 done
 
-# Git-hook / template-dir injection (SANDWORM_MODE): a poisoned pre-commit/pre-push
-# hook — installed directly, or globally via init.templateDir, or per-repo via
-# core.hooksPath — re-runs the dropper on every commit/push and silently adds the
-# carrier dependency. This is a top "inject into a repo we pseudo-trust" vector.
-# Ask git for the hooks dir rather than assuming .git/ is a directory: in a
-# WORKTREE .git is a file, so the literal path resolves to nothing and the scan
-# covered nothing (issue #60). rev-parse --git-path handles plain checkout,
-# worktree, and core.hooksPath alike; its output can be relative to $CWD.
-# Literal fallback keeps coverage when git is missing or $CWD is not a repo.
+# Ask git for the hooks dir: in a WORKTREE .git is a FILE, so the literal path scanned
+# nothing (#60). The literal fallback covers a missing git or a non-repo $CWD.
 repo_hooks=$(git -C "$CWD" rev-parse --git-path hooks 2>/dev/null) || repo_hooks=""
 [[ -n "$repo_hooks" ]] || repo_hooks="${CWD}/.git/hooks"
 [[ "$repo_hooks" == /* ]] || repo_hooks="${CWD}/${repo_hooks}"
@@ -675,47 +507,23 @@ BODY
   done
 done
 
-# Indices 3-4: gh_token_monitor, kitty_monitor — fire AFTER the git-hook scan, in
-# their historical order (preserving accumulated alert order).
-_persist_scan 3 4
+_persist_scan 3 4   # gh_token_monitor, kitty_monitor
+_persist_scan 5     # hades_ssh
+_persist_scan 6     # miasma_rat
 
-# Index 5: hades_ssh — the SSH-propagation dropper, just before the .pth/.so scans.
-_persist_scan 5
+# Python AUTO-RUNS a site-packages *.pth at interpreter start. A legit one only touches
+# sys.path, which is what keeps MALWARE_PTH_RE near-zero-FP.
 
-# Index 6: miasma_rat — NodeJS/sync.js + .miasma lock dir + miasma-monitor unit.
-_persist_scan 6
-
-# Weaponized Python .pth startup hook (Hades/Miasma PyPI wave). A malicious PyPI
-# package (MCP typosquats like openai-mcp / langchain-core-mcp) drops a *.pth into
-# site-packages; Python AUTO-RUNS its import-prefixed line on every interpreter
-# start, downloading Bun and executing the bundled _index.js stealer. This is a
-# persistence hook in the same class as an injected SessionStart hook — caught here
-# regardless of how it arrived (pip/uv are not gated). Bounded find over the
-# project's venv layouts + any stray committed .pth; legit .pth files only touch
-# sys.path, so MALWARE_PTH_RE (process spawn / socket / URL fetch / bun) is near-0 FP.
-# Seed list for BOTH Python sweeps (.pth here, .abi3.so below). The four
-# conventional names cover committed layouts; $VIRTUAL_ENV / $CONDA_PREFIX cover an
-# ACTIVE env whatever it is named (venv312, .direnv, a Poetry cache, a conda env);
-# the user/global globs below cover `pip install` OUTSIDE any venv — the exact
-# audience the Hades/Miasma MCP typosquats target (issue #58). Global prefixes are
-# enumerated by GLOB, not by asking an interpreter: `python3 -I -S -c 'import site…'`
-# is verified safe (-S suppresses .pth processing, even through an explicit
-# `import site`), but it reports only the ONE resolved interpreter — a pyenv/uv
-# machine has N others — and costs a spawn on every event including each prompt
-# turn. The globs cover every installed layout at stat cost; a prefix that does
-# not exist adds nothing. /usr/lib (apt-owned, root-only, pip never writes there)
-# stays out. -maxdepth 5: site-packages sits at depth 4 under a venv root
-# (<venv>/lib/python3.12/site-packages), so 4 left zero margin.
+# Seed roots for BOTH Python sweeps. Globs, not `python3 -c "import site"`: an interpreter
+# reports only ITSELF, a pyenv/uv machine has N others, and it costs a spawn every turn.
 py_roots=("${CWD}/.venv" "${CWD}/venv" "${CWD}/env" "${CWD}/.tox")
 case "${VIRTUAL_ENV:-}" in
   ""|"${CWD}/.venv"|"${CWD}/venv"|"${CWD}/env"|"${CWD}/.tox") : ;;  # empty or already seeded
   *) [[ -d "$VIRTUAL_ENV" ]] && py_roots+=("$VIRTUAL_ENV") ;;
 esac
 [[ -n "${CONDA_PREFIX:-}" && -d "${CONDA_PREFIX:-}" ]] && py_roots+=("$CONDA_PREFIX")
-# User + global site-packages (issue #58): ~/.local (pip --user, Linux),
-# ~/Library/Python (pip --user, macOS framework python), Homebrew (ARM + Intel),
-# /usr/local {site,dist}-packages (sudo pip / Debian), python.org framework
-# installs, every pyenv version, every uv-managed interpreter.
+# User + global site-packages (#58) — where `pip install` outside a venv lands, the exact
+# audience the MCP typosquats target. /usr/lib stays out: apt-owned, pip never writes there.
 for _u in "$HOME"/.local/lib/python*/site-packages \
           "$HOME"/Library/Python/*/lib/python/site-packages \
           /opt/homebrew/lib/python*/site-packages \
@@ -743,8 +551,7 @@ if [[ ${#pth_files[@]} -gt 0 ]]; then
       [[ -n "$pth_m" ]] && pth_reason="executes code on interpreter start: $pth_m"
     fi
     [[ -z "$pth_reason" ]] && continue
-    # Quarantine only the name/hash IOC matches — a behavioral match is report-only
-    # (the FP-tolerance invariant: an unattended rename demands exact-match confidence).
+    # Name/hash IOCs only — an unattended rename demands exact-match confidence.
     [[ "$pth_exact" == 1 ]] && _quarantine "$pth"
     alert "MALICIOUS PYTHON .pth STARTUP HOOK DETECTED" "$(cat <<BODY
 A Python .pth startup hook runs code on every interpreter start:
@@ -768,20 +575,14 @@ BODY
   done
 fi
 
-# Native import-time payload (Hades/Miasma PyPI wave): a compiled .abi3.so extension
-# module that runs a credential stealer the moment Python imports the carrier package —
-# the binary analogue of the .pth hook above, needing no install step and no .pth. A
-# compiled binary is opaque to the content greps every other tier relies on, so the
-# exact basename (MALWARE_NATIVE_SO_NAMES) is the only tree-scan handle. Same bounded
-# venv walk as the .pth sweep; legit .abi3.so files are enumerated but only the two
-# known-bad campaign artifacts flag (zero FP).
+# A compiled .abi3.so runs at package import, and a binary is opaque to the content greps every
+# other tier relies on — so the exact basename is the only handle a tree scan has.
 so_files=()
 while IFS= read -r _s; do [[ -n "$_s" ]] && so_files+=("$_s"); done < <(
   timeout 5 find "${py_roots[@]}" -maxdepth 5 -name '*.abi3.so' -type f 2>/dev/null
 )
 for _s in "${CWD}"/*.abi3.so; do [[ -f "$_s" ]] && so_files+=("$_s"); done
-# Count-guard the iteration: under bash 3.2 + `set -u`, expanding "${so_files[@]}"
-# on an EMPTY array is an unbound-variable error (mirrors the .pth block above).
+# bash 3.2 + `set -u`: expanding "${so_files[@]}" on an EMPTY array is an unbound-variable error.
 if [[ ${#so_files[@]} -gt 0 ]]; then
 for so in "${so_files[@]}"; do
   so_base="${so##*/}" so_bad=0
@@ -809,16 +610,8 @@ fi
 
 # ══ TIER 1: project source + package.json lifecycle — cheap (~26ms), every event ══
 if [[ "$RUN_T1" == 1 ]]; then
-  # Install-time: scan package.json lifecycle scripts for dropper patterns. This is
-  # the one check that fires BEFORE malicious code executes (preinstall fires even
-  # if install later fails), so it's the real pre-install gate. It reads the manifest
-  # of EVERY target dir plus every workspace package under each (issue #57): a root
-  # `npm install` runs each workspace's own preinstall, so the root-only read never
-  # inspected the surface an attacker actually reaches. Workspace globs come from
-  # package.json `workspaces` (array or {packages}) and pnpm-workspace.yaml list
-  # items; a negation (!…) is skipped, and node_modules matches are filtered (that
-  # surface is Tier 2's). The glob is untrusted manifest data but its expansion only
-  # feeds [[ -f ]] tests and jq file args — never a command line.
+  # The one check that fires BEFORE malicious code executes: preinstall runs even when the
+  # install later fails. A root install runs EVERY workspace's preinstall, so read them all (#57).
   _ws_globs() {  # $1 = root dir -> workspace glob patterns, one per line
     [[ -f "$1/package.json" ]] && jq -r '.workspaces // []
       | if type == "object" then (.packages // []) else . end | .[]?' "$1/package.json" 2>/dev/null
@@ -830,9 +623,8 @@ if [[ "$RUN_T1" == 1 ]]; then
     [[ -f "$_t/package.json" ]] && _add_manifest "$_t/package.json"
     while IFS= read -r _g; do
       [[ -z "$_g" || "$_g" == \!* ]] && continue
-      # Intentional unquoted glob expansion of the workspace pattern, relative to
-      # the root. No nullglob on bash 3.2: a no-match leaves the literal '*' path,
-      # which the -f test rejects.
+      # Unquoted on purpose. No nullglob on bash 3.2, so a no-match leaves the literal '*'
+      # path — which the -f test then rejects.
       for _m in "$_t"/$_g/package.json; do
         [[ -f "$_m" && "$_m" != */node_modules/* ]] && _add_manifest "$_m"
       done
@@ -859,10 +651,8 @@ BODY
 )"
   done
 
-  # Release-config poisoning (SANDWORM_MODE): an injected semantic-release / release-it
-  # exec step that require()s a hidden carrier dep at publish time. `@semantic-release/
-  # exec` alone is legit, so MALWARE_RELEASERC_RE matches only the carrier tell.
-  # Checked in every target dir (issue #57), like the lifecycle gate above.
+  # Release-config poisoning: `@semantic-release/exec` alone is legit, so MALWARE_RELEASERC_RE
+  # matches only the carrier tell — a publish-time require() of a hidden dep.
   rc_list=()
   for _t in "${TARGET_DIRS[@]}"; do
     rc_list+=( "$_t/.releaserc" "$_t/.releaserc.json" "$_t/.releaserc.yaml"
@@ -887,10 +677,8 @@ BODY
 )"
   done
 
-  # Workflow poisoning (SANDWORM_MODE ci-quality campaign): known-bad action/persona
-  # slugs in .github/workflows. pull_request_target alone is legit and NOT flagged —
-  # only the campaign fingerprints (see MALWARE_WORKFLOW_RE) trip this. Checked in
-  # every target dir (issue #57).
+  # Workflow poisoning: pull_request_target alone is legit and NOT flagged. Only the campaign
+  # fingerprints in MALWARE_WORKFLOW_RE trip this.
   for _t in "${TARGET_DIRS[@]}"; do
     [[ -d "$_t/.github/workflows" ]] || continue
     wf_hit=$(grep -rilE "$MALWARE_WORKFLOW_RE" "$_t/.github/workflows" 2>/dev/null | head -1)
@@ -911,18 +699,11 @@ BODY
     fi
   done
 
-  # Project source scan: an attacker with repo write-access can inject the loader into
-  # ANY file (Microsoft's case was server/routes/api/auth.js), so scan the tree broadly.
-  # Narrow INJECT_RE keeps FPs down on minified bundles; build/VCS dirs excluded.
-  # KEY-DECISION 2026-06-06: NO timeout on this grep. Tier 1 is the tier that BLOCKS,
-  # so a truncated walk here is a coverage hole, not a graceful degradation. A 15s
-  # ceiling once fired on a 149-file tree (4ms scan when healthy) purely from
-  # post-wake system load — a false-alarm 🟡 with no self-healing. The walk is still
-  # bounded by the hook-level `timeout` in hooks.json (the harness kills the whole
-  # hook past that), which is set high enough that only a genuinely pathological
-  # tree hits it.
-  # Walk $CWD plus any target dir NOT under it (a `cd ../other && npm install`
-  # form — issue #57); a target inside $CWD is already covered by the $CWD walk.
+  # An attacker with write access injects the loader into ANY file, so scan the tree broadly;
+  # a narrow INJECT_RE is what keeps FPs down on minified bundles.
+
+  # KEY-DECISION 2026-06-06: NO timeout here. Tier 1 BLOCKS, so a truncated walk is a coverage
+  # hole, not a degradation — a 15s ceiling once fired on a 149-file tree from post-wake load.
   src_roots=("$CWD")
   for _t in "${TARGET_DIRS[@]}"; do
     case "$_t" in "$CWD"|"$CWD"/*) : ;; *) src_roots+=("$_t") ;; esac
@@ -961,8 +742,9 @@ BODY
 fi
 
 # ══ TIER 2: node_modules content/IOC scan — expensive, only when deps changed ══
-# Known payload filenames (name == proof) vs hash-IOC filenames (name needs hash
-# confirmation; e.g. router_runtime.js can be legit). One find traversal for both.
+
+# PAYLOAD names are proof on their own; HASH_IOC names need the hash, since router_runtime.js
+# and friends can be legit. One find traversal covers both.
 PAYLOAD_FILES=(
   "setup_bun.js" "set_bun.js" "bun_environment.js" "com.apple.act.mond"
   "c0nt3nts.json" "c9nt3nts.json" "3nvir0nm3nt.json" "cl0vd.json"
@@ -985,13 +767,12 @@ HASH_IOC_HASHES=(
 )
 
 if [[ "$RUN_T2" == 1 && -d "$NODE_MODULES" ]]; then
-  # Single traversal for every IOC filename (was 17 separate find passes).
   find_expr=() ; first=1
   for n in "${PAYLOAD_FILES[@]}" "${HASH_IOC_FILES[@]}"; do
     if [[ $first == 1 ]]; then find_expr+=( -name "$n" ); first=0; else find_expr+=( -o -name "$n" ); fi
   done
-  # Capture find's output (not a process substitution) so a timeout (exit 124) is
-  # observable — a truncated walk must report ⚠️, not pass as clean.
+  # Capture, not a process substitution, so the timeout's exit 124 stays observable — a
+  # truncated walk must report a caveat, never pass as clean.
   ioc_paths=$(timeout 20 find "$NODE_MODULES" -maxdepth 6 \( "${find_expr[@]}" \) -type f 2>/dev/null)
   [[ $? -eq 124 ]] && warn "node_modules IOC-filename walk timed out at 20s (coverage incomplete)"
   while IFS= read -r path; do
@@ -1039,12 +820,8 @@ BODY
     fi
   done <<<"$ioc_paths"
 
-  # Content fingerprints: ONE combined gate pass (was 14 separate walks). On a hit —
-  # rare — re-grep the single offending file per-pattern to name the campaign.
-  # Name the engine in the timeout warning: "timed out" with no engine hid a
-  # week of grep-fallback timeouts whose actual cause (no rg in the executing
-  # copy) was diagnosable from the message alone. Engine label must be set
-  # BEFORE the scan so the $? test still sees the scan's exit status.
+  # One combined gate pass; a hit is rare enough to re-grep that file per-pattern for the name.
+  # Set the engine label BEFORE the scan, so the $? test still reads the scan's exit status.
   if _rg_ok "$MALWARE_CONTENT_RE"; then
     t2_engine="rg"
     hit_out=$(timeout 20 "$RG_BIN" -la --max-count=1 --no-ignore --hidden \
@@ -1081,23 +858,19 @@ BODY
   fi
 fi
 
-# Refresh the scan cache only after a CLEAN, COMPLETE expensive scan (no alerts
-# reached here; in pre_tool mode a finding would have emitted a deny and exited
-# already). A timed-out walk (WARNINGS) is not a clean scan — don't cache it, so
-# the next event retries the full walk.
+# Only a CLEAN, COMPLETE scan refreshes the cache: a timed-out walk is not a clean scan, so
+# leaving it uncached makes the next event retry the full walk.
 if [[ "$UPDATE_CACHE" == 1 && -z "$ALERTS" && -z "$WARNINGS" && -d "$NODE_MODULES" ]]; then
   mkdir -p "$CACHE_DIR" && _scan_key > "$MARKER"
 fi
 
-# SessionStart/PostToolUse: deliver on BOTH channels — `systemMessage` is shown to
-# the user directly (the loud part), `additionalContext` instructs the model to refuse
-# follow-up installs. SessionStart can't abort, so this is the strongest startup signal.
+# Both channels: systemMessage is the loud part the user sees, additionalContext is what makes
+# the model refuse follow-up installs. SessionStart cannot abort, so this is its strongest signal.
 if [[ "$MODE" != "pre_tool" && -n "$ALERTS" ]]; then
   evname="SessionStart"; [[ "$MODE" == "post_tool" ]] && evname="PostToolUse"
   count=$(printf '%s' "$SUMMARY" | grep -c '•')
   findings_json=$(printf '%s' "$FINDINGS" | jq -sc .)
-  # Top-level `verdict` + `findings` are the machine-readable contract (extra keys are
-  # ignored by Claude Code); systemMessage/additionalContext remain the human channels.
+  # Claude Code ignores the extra top-level keys; the CLI adapter reads them.
   jq -n --arg ctx "$ALERTS" --arg sum "$SUMMARY" --arg ev "$evname" --arg n "$count" --argjson findings "$findings_json" '{
     verdict: "red",
     findings: $findings,
@@ -1109,16 +882,8 @@ if [[ "$MODE" != "pre_tool" && -n "$ALERTS" ]]; then
   }'
 fi
 
-# ── Always-on status line ─────────────────────────────────────────────────────
-# KEY-DECISION 2026-06-06: a clean pass prints 🟢 and a degraded pass 🟡 via
-# `systemMessage` (the only channel guaranteed to reach the USER) so that silence
-# is never ambiguous — before this, "scanned clean" and "hook never ran" looked
-# identical, the same invisibility class as the "silent for a month" bug. Findings
-# stay 🚨 via the alert paths above. No additionalContext on green/yellow: status
-# is for the human; the model needs no instruction when nothing is wrong.
-# Glyphs are 🟢/🟡 + a `[wormhook]` tag (not ✅/⚠️) to match the traffic-light
-# convention of sibling SessionStart status hooks, so multiple lights read as one
-# uniform dashboard strip.
+# KEY-DECISION 2026-06-06: a clean pass prints 🟢 and a degraded one 🟡, so "scanned clean" and
+# "hook never ran" cannot look identical. No additionalContext: the status line is for the human.
 if [[ -z "$ALERTS" ]]; then
   SCOPE="persistence"
   [[ "$RUN_T1" == 1 ]] && SCOPE+=" + source"
@@ -1127,11 +892,8 @@ if [[ -z "$ALERTS" ]]; then
   elif [[ -d "$NODE_MODULES" ]]; then
     SCOPE+=" + node_modules (cached, deps unchanged)"
   fi
-  # Scan-runtime suffix " (x.xs)" — SessionStart only, matching the doctor dashboard lights it sits
-  # beside. The per-turn/blocking events (pre_tool/post_tool/prompt_submit) stay unsuffixed: their
-  # latency is the user's own command, not a dashboard metric. Guard on a non-empty stamp before
-  # subtracting — a `:-0` default would make jq report `now - 0` (the whole Unix epoch) as the scan
-  # time; an empty stamp (jq-now failed at startup) short-circuits to "(0.0s)".
+  # SessionStart only: on a per-turn or blocking event the latency is the user's own command,
+  # not a dashboard metric. An empty stamp must short-circuit — `now - 0` is the whole epoch.
   DUR=""
   if [[ "$MODE" == "session_start" ]]; then
     __elapsed=0
@@ -1139,14 +901,12 @@ if [[ -z "$ALERTS" ]]; then
     DUR=" ($(printf '%.1f' "$__elapsed")s)"
   fi
   if [[ -n "$WARNINGS" ]]; then
-    # A degraded pass speaks on EVERY event, including prompt_submit — a silently degraded
-    # continuous monitor is the invisibility bug all over again.
+    # A degraded pass speaks on EVERY event, prompt_submit included: a silently degraded
+    # monitor is invisible exactly when it matters.
     jq -nc --arg msg "🟡 [wormhook] passed with caveats ($SCOPE)$DUR — $WARNINGS" '{verdict: "yellow", systemMessage: $msg}'
   elif [[ "$MODE" != "prompt_submit" ]]; then
-    # Clean 🟢 is suppressed for prompt_submit ONLY: it fires every human turn, so a 🟢 each
-    # time would spam the transcript. The continuous monitor stays silent when healthy and
-    # speaks only on a finding (🚨 block above) or degradation (🟡 above). (Note: the SessionStart
-    # doctor checks, by contrast, now emit a 🟢 every session — that is the dashboard, not a per-turn monitor.)
+    # The 🟢 is suppressed for prompt_submit only: it fires every human turn, so printing one
+    # each time would spam the transcript.
     jq -nc --arg msg "🟢 [wormhook] clean ($SCOPE)$DUR" '{verdict: "green", systemMessage: $msg}'
   fi
 fi

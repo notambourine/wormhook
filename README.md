@@ -365,6 +365,16 @@ refreshes the cache), 🚨 findings. Non-gated commands stay silent.
   package import with no `.pth`, plus `/tmp/.sshu-setup.js` SSH propagation. Caught at Tier 0, and `pip`/`uv`/`python` now
   [trigger that scan at `PreToolUse`](#beyond-the-tiers) so it runs **before** the interpreter
   auto-executes a poisoned `.pth` — not just on the next npm/git command.
+- **ChainDrop / keyv-cacheable wave** (Aug 2026) — the `setup.mjs` loader and
+  `math_init.js` payload by SHA256 hash IOC, plus the Ethereum C2-resolution contract
+  address embedded in the payload (`0xE1f2…3103`; the C2 *domains* resolve at runtime, so
+  they belong to a network blocklist, not a content grep). The wave's GitHub commit-search
+  fallback markers (`thebeautiful{march,snads}oftime`) were already covered.
+- **Miasma RAT / AsyncAPI compromise** (`miasma-train-p1`, Jul 2026) — an import-time
+  loader that runs on `require()` and defeats `--ignore-scripts`; Tier-0 persistence
+  checks for `NodeJS/sync.js`, the `~/.config/.miasma` lock dir, and the `miasma-monitor`
+  login unit, plus Tier-2 payload markers (`M-RED-TEAM v6.4`, `_miasma._tcp`) and the two
+  IPFS second-stage CIDs.
 - **Dev-env & CI injection** — rogue `mcpServers`/SessionStart-hook entries across
   `.claude`/`.cursor`/`.continue`/`.vscode` (including a `.vscode/tasks.json` `folderOpen`
   task that re-runs `setup.mjs` on every project open), poisoned git hooks
@@ -459,6 +469,9 @@ mirrored in the header of [`scripts/wormhook.sh`](./scripts/wormhook.sh)):
 - **Snyk** — [Mini Shai-Hulud hits AntV](https://snyk.io/blog/mini-shai-hulud-antv-npm-supply-chain-attack/) (`kitty-monitor`, `firedalazer`, `.vscode/tasks.json` `folderOpen`)
 - **Unit 42** — [Monitoring npm supply-chain attacks](https://unit42.paloaltonetworks.com/monitoring-npm-supply-chain-attacks/) (`audit.checkmarx.cx`, `OhNoWhatsGoingOnWithGitHub` C2)
 - **Mend** — [Shai-Hulud SAP CAP via Claude Code](https://www.mend.io/blog/shai-hulud-sap-cap-supply-chain-attack-claude-code/) (`ctf-scramble-v2`, `__DAEMONIZED`, russian-locale kill-switch)
+- **Microsoft** — [AsyncAPI compromise & Miasma import-time payload](https://www.microsoft.com/en-us/security/blog/2026/07/15/unpacking-asyncapi-npm-supply-chain-compromise-import-time-payload-delivery/) (`miasma-train-p1`, `NodeJS/sync.js`, `.miasma`, IPFS CIDs) · [ChainDrop anatomy](https://www.microsoft.com/en-us/security/blog/2026/08/04/chaindrop-supply-chain-compromise-anatomy-self-propagating-worm/)
+- **Elastic** — [ChainDrop / keyv Shai-Hulud wave](https://www.elastic.co/security-labs/shai-hulud-chaindrop-npm-supply-chain) (payload hashes, ETH contract)
+- **JFrog** — [Shai-Hulud is back (Aug 2026)](https://research.jfrog.com/post/shai-hulud-is-back-august/) (`math_init.js` hash pairing, runtime C2 resolution)
 
 ## License
 

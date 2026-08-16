@@ -35,6 +35,15 @@
 #       execute on package import with no .pth; /tmp/.sshu-setup.js SSH propagation;
 #       thebeautiful{march,snads}oftime fallback C2-discovery strings. Targets
 #       bioinformatics + MCP developers.
+#   - AsyncAPI / Miasma RAT "miasma-train-p1" (Jul 2026): @asyncapi/{specs,generator,…}
+#       republished with an IMPORT-TIME loader (runs on require(), defeats --ignore-scripts);
+#       persists as NodeJS/sync.js + ~/.config/.miasma lock dir + miasma-monitor login unit;
+#       M-RED-TEAM v6.4 / _miasma._tcp payload markers, IPFS-staged second stage (2 CIDs)
+#   - ChainDrop / keyv-cacheable Shai-Hulud wave (Aug 2026): keyv@6.0.0 preinstall ->
+#       setup.mjs loader + math_init.js payload (SHA256 hash IOCs); C2 resolved at runtime
+#       from ETH contract 0xE1f2…3103 (the address is the on-disk constant; domains stay in
+#       the network layer); falls back to the thebeautiful{march,snads}oftime commit-search
+#       markers already covered above
 #   - Remote-eval loader (recurring): atob(process.env.FAKE_KEY) -> fetch -> eval
 #   - CISA: https://www.cisa.gov/news-events/alerts/2025/09/23/widespread-supply-chain-compromise-impacting-npm-ecosystem
 #   - Datadog: https://securitylabs.datadoghq.com/articles/shai-hulud-2.0-npm-worm/
@@ -46,6 +55,10 @@
 #   - Snyk (AntV, May 2026): https://snyk.io/blog/mini-shai-hulud-antv-npm-supply-chain-attack/
 #   - Unit42 (TeamPCP/npm landscape): https://unit42.paloaltonetworks.com/monitoring-npm-supply-chain-attacks/
 #   - Mend (SAP-CAP via Claude Code): https://www.mend.io/blog/shai-hulud-sap-cap-supply-chain-attack-claude-code/
+#   - Microsoft (AsyncAPI/Miasma, Jul 2026): https://www.microsoft.com/en-us/security/blog/2026/07/15/unpacking-asyncapi-npm-supply-chain-compromise-import-time-payload-delivery/
+#   - Elastic (ChainDrop, Aug 2026): https://www.elastic.co/security-labs/shai-hulud-chaindrop-npm-supply-chain
+#   - Microsoft (ChainDrop, Aug 2026): https://www.microsoft.com/en-us/security/blog/2026/08/04/chaindrop-supply-chain-compromise-anatomy-self-propagating-worm/
+#   - JFrog (ChainDrop, Aug 2026): https://research.jfrog.com/post/shai-hulud-is-back-august/
 #
 # KEY-DECISION 2026-06-01: tiered execution. Scanning node_modules costs ~4-27s on a
 # large repo (8600 files) but it only changes on install; the source/persistence scans
@@ -549,6 +562,21 @@ its presence means the payload has ALREADY run on this machine." \
   4. Rotate ALL credentials (SSH keys, GitHub PATs/OIDC, npm/PyPI tokens, cloud)
   5. Inspect site-packages *.pth startup hooks (the PyPI delivery vector)"
         ;;
+      miasma_rat)
+        # Miasma RAT (AsyncAPI "miasma-train-p1"). The macOS drop path holds a space, so
+        # the table cannot list it; the cross-platform .miasma lock dir fires there instead.
+        persistence_check "MIASMA RAT PERSISTENCE DETECTED" \
+          "Found Miasma RAT persistence artifact: $WH_PERSIST_HIT
+The AsyncAPI compromise (miasma-train-p1) runs at module IMPORT (no lifecycle script)
+and persists as NodeJS/sync.js plus a miasma-monitor login unit; a .miasma directory
+means the payload has ALREADY run on this machine." \
+          "  1. Remove: command rm -rf \"\$HOME/.config/.miasma\" and every NodeJS/sync.js copy
+     (also check \"\$HOME/Library/Application Support/NodeJS/sync.js\" on macOS)
+  2. Linux: systemctl --user disable --now miasma-monitor 2>/dev/null; command rm -f \"\$HOME/.config/systemd/user/miasma-monitor.service\"
+  3. Check: ps aux | grep -iE 'sync\.js|miasma' (kill any running RAT)
+  4. Rotate ALL credentials (npm/GitHub tokens, SSH keys, cloud + k8s creds)
+  5. Audit installed @asyncapi/* versions against the Microsoft advisory list"
+        ;;
     esac
   done
 }
@@ -653,6 +681,9 @@ _persist_scan 3 4
 
 # Index 5: hades_ssh — the SSH-propagation dropper, just before the .pth/.so scans.
 _persist_scan 5
+
+# Index 6: miasma_rat — NodeJS/sync.js + .miasma lock dir + miasma-monitor unit.
+_persist_scan 6
 
 # Weaponized Python .pth startup hook (Hades/Miasma PyPI wave). A malicious PyPI
 # package (MCP typosquats like openai-mcp / langchain-core-mcp) drops a *.pth into
@@ -937,7 +968,7 @@ PAYLOAD_FILES=(
   "c0nt3nts.json" "c9nt3nts.json" "3nvir0nm3nt.json" "cl0vd.json"
   "actionsSecrets.json" "truffleSecrets.json" "gh-token-monitor.sh"
 )
-HASH_IOC_FILES=( "router_init.js" "router_runtime.js" "tanstack_runner.js" "opensearch_init.js" "setup_bun.js" "bun_environment.js" )
+HASH_IOC_FILES=( "router_init.js" "router_runtime.js" "tanstack_runner.js" "opensearch_init.js" "setup_bun.js" "bun_environment.js" "math_init.js" "Math_Symbol.js" "setup.mjs" )
 HASH_IOC_HASHES=(
   "ab4fcadaec49c03278063dd269ea5eef82d24f2124a8e15d7b90f2fa8601266c"
   "2ec78d556d696e208927cc503d48e4b5eb56b31abc2870c2ed2e98d6be27fc96"
@@ -946,6 +977,11 @@ HASH_IOC_HASHES=(
   "62ee164b9b306250c1172583f138c9614139264f889fa99614903c12755468d0"
   "cbb9bc5a8496243e02f3cc080efbe3e4a1430ba0671f2e43a202bf45b05479cd"
   "f099c5d9ec417d4445a0328ac0ada9cde79fc37410914103ae9c609cbc0ee068"
+  # ChainDrop / keyv wave (Aug 2026): math_init.js payload (Elastic names the same hash
+  # Math_Symbol.js, so both basenames are listed) + the two setup.mjs loader variants.
+  "9fc2570b7cef51c1b8df116d144d11ff4096357be7d2c4c6367cfc2509cf1bcc"
+  "fd3ca4007b225fdf8de7af4345a19179d5efa8c4bb9205f88cda806e5684b1eb"
+  "54dc7ea54a1317cca0e890a2770630cf7fa6c97813e0cb9d2caa93012b350668"
 )
 
 if [[ "$RUN_T2" == 1 && -d "$NODE_MODULES" ]]; then
@@ -987,7 +1023,7 @@ File: $path
 Bad hash: $expected
 ${COMMAND:+Command blocked: $COMMAND}
 
-Source: TanStack @tanstack/* supply-chain compromise. Exfil to filev2.getsession.org.
+Source: a known payload hash - TanStack wave (getsession exfil) or ChainDrop/keyv (Aug 2026).
 Action:
   1. Run: command rm -rf "$NODE_MODULES"
   2. Pin @tanstack/* versions in lockfile with verified 'integrity' fields

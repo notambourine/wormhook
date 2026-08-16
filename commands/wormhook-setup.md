@@ -32,7 +32,7 @@ what is missing). Do not re-install anything already marked installed.
 Use **AskUserQuestion** (multiSelect) offering only the pieces that `status` showed as *not*
 installed:
 
-- **CLI on PATH** — symlink `wormhook-scan` into `~/.local/bin` so you can run
+- **CLI on PATH** — put `wormhook-scan` in `~/.local/bin` so you can run
   `wormhook-scan ~/code/*/` anytime (morning / pause-moment fleet checks).
 - **Git-pull audit** — a global git hook: every `git pull`/`checkout` prints a **loud red
   report if the update pulled in a supply-chain IOC**, so you see it *before* you run
@@ -60,7 +60,7 @@ common roots (`~/code`, `~/sandbox/git-repos`, `~/work`) plus "Other" for a cust
 ## 4. Confirm
 
 Run `bash "$SCRIPT" status` again and summarize what changed plus how to reverse each piece
-(`uninstall-git-hook`, `uninstall-launchd`, or remove the `~/.local/bin` symlink). Keep the
+(`uninstall-git-hook`, `uninstall-launchd`, or remove `~/.local/bin/wormhook-scan`). Keep the
 whole interaction concise; never install anything the user did not pick.
 
 ## 5. Optional: shell exec-guard (manual, paste-only)

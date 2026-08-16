@@ -31,6 +31,16 @@ degrades to ⚪, never to actual silence. The jq 🔴 (`doctor/deps.sh`) and the
   cooperates with an existing `core.hooksPath` and appends a `# >>> wormhook >>>` marker
   block to a pre-existing hook (never overwrites); `uninstall-git-hook` removes only that
   block. launchd label: `com.notambourine.wormhook-sweep` (org-namespaced; in no IOC set).
+- **Nothing a LaunchAgent execs may change identity on a release.** macOS re-alerts "can run
+  in the background" for every agent whose binary moves, so both installers write only on a
+  real diff: `install-launchd` byte-compares the rendered plist, and `install-cli` writes
+  `~/.local/bin/wormhook-scan` as a **launcher with a version-independent body** — never a
+  symlink, which a version-scoped plugin path (`…/plugins/cache/<mkt>/wormhook/<version>/`)
+  would retarget every release. The version lives in the pointer file
+  (`…/wormhook/install-path`), which no agent execs. The launcher reads `installed_plugins.json`
+  first so a plugin update between `install-cli` runs self-heals, falls back to the pointer for a
+  non-plugin install, and exits `2` (degraded, never a false `0`) when neither resolves. It must
+  `rm` a path before `cp`: writing onto a legacy symlink would overwrite the install it targets.
 - **Discovery, not glob-literal.** A scan path resolves to the git repo(s) at/under it
   (`node_modules` pruned); a `node_modules`/`dist` dir is never scanned *as a project*.
   `--literal` bypasses discovery.

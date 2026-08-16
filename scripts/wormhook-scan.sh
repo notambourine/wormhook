@@ -19,7 +19,8 @@ set -uo pipefail
 
 command -v jq >/dev/null 2>&1 || { echo "wormhook-scan: jq required (brew install jq)" >&2; exit 1; }
 
-# Resolve through any symlink (~/.local/bin/wormhook-scan) to find the sibling engine.
+# Resolve through any symlink to find the sibling engine (install-cli writes a launcher that
+# execs this path directly, but a hand-made or legacy link must still resolve).
 SOURCE="${BASH_SOURCE[0]}"
 while [[ -h "$SOURCE" ]]; do
   _dir="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
@@ -41,6 +42,9 @@ LABEL="$WORMHOOK_LAUNCHD_LABEL"
 readonly EXIT_OK=0 EXIT_CRIT=1 EXIT_DEGRADED=2
 
 CONFIG="${WORMHOOK_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/wormhook/scan-roots}"
+# Absolute, baked into the launcher at install time: launchd runs it without XDG_CONFIG_HOME,
+# so a launcher that re-derived this would miss a pointer written under a custom XDG root.
+PATHFILE="${XDG_CONFIG_HOME:-$HOME/.config}/wormhook/install-path"
 SAMPLE="$SCRIPT_DIR/wormhook-scan.conf.sample"
 SWEEP_LOG="${WORMHOOK_LOG:-$HOME/Library/Logs/wormhook-sweep.log}"
 
@@ -296,13 +300,49 @@ cmd_scan() {
 }
 
 # ══ install-cli
+_shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+
+# A launcher, NOT a symlink: a plugin install is version-scoped, so a symlink retargets every
+# release and macOS re-alerts about each LaunchAgent that execs it. Keep this body constant.
+_cli_launcher() {  # -> launcher text on stdout
+  printf '#!/usr/bin/env bash\n'
+  printf '# wormhook-scan launcher, written by wormhook-scan install-cli. Do not edit:\n'
+  printf '# a rewrite re-alerts macOS about every LaunchAgent that execs this path.\n'
+  printf '_wh_pathfile=%s\n' "$(_shq "$PATHFILE")"
+  # Manifest first, pointer second: that order self-heals a plugin update that lands between
+  # install-cli runs. jq absent => empty => the pointer still resolves.
+  cat <<'SHIM'
+_wh_root=$(jq -r '[.plugins | to_entries[] | select(.key | startswith("wormhook@"))
+  | .value[]? | .installPath? | strings] | .[0] // ""' \
+  "$HOME/.claude/plugins/installed_plugins.json" 2>/dev/null)
+[ -r "$_wh_root/scripts/wormhook-scan.sh" ] || _wh_root=$(cat "$_wh_pathfile" 2>/dev/null)
+[ -r "$_wh_root/scripts/wormhook-scan.sh" ] || {
+  echo "wormhook-scan: no install found — re-run install-cli from the plugin" >&2; exit 2; }
+exec bash "$_wh_root/scripts/wormhook-scan.sh" "$@"
+SHIM
+}
 cmd_install_cli() {
-  local bindir="$HOME/.local/bin"
-  mkdir -p "$bindir"
-  ln -sf "$SELF" "$bindir/wormhook-scan"
-  ln -sf "$SELF" "$bindir/wormhook"
-  echo "linked: $bindir/wormhook-scan -> $SELF"
-  echo "linked: $bindir/wormhook       -> $SELF"
+  local bindir="$HOME/.local/bin" root n f tmp wrote=0
+  root="$(cd -P "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd)" || _die "cannot resolve plugin root from $SCRIPT_DIR"
+  mkdir -p "$bindir" "$(dirname "$PATHFILE")"
+  # The pointer is plain data no LaunchAgent execs, so rewriting it costs nothing.
+  printf '%s\n' "$root" > "$PATHFILE.tmp.$$" && mv -f "$PATHFILE.tmp.$$" "$PATHFILE"
+  tmp="$bindir/.wormhook-cli.tmp.$$"
+  _cli_launcher > "$tmp" || { command rm -f "$tmp"; _die "could not write $tmp"; }
+  for n in wormhook-scan wormhook; do
+    f="$bindir/$n"
+    # -L first: a legacy symlink compares equal to nothing, and `cp` onto one would write
+    # THROUGH it and overwrite the install it points at.
+    if [[ -L "$f" ]]; then
+      command rm -f "$f"
+    elif cmp -s "$tmp" "$f" 2>/dev/null; then
+      echo "already current: $f"; continue
+    fi
+    cp "$tmp" "$f" && chmod +x "$f" && { echo "installed: $f"; wrote=1; } || echo "failed: $f" >&2
+  done
+  command rm -f "$tmp"
+  echo "resolves to: $root  (pointer: $PATHFILE)"
+  [[ "$wrote" == 1 ]] && echo "note: macOS may alert once about a background item — the launcher is stable from here."
   case ":$PATH:" in
     *":$bindir:"*) : ;;
     *) echo "note: $bindir is not on \$PATH — add it (e.g. export PATH=\"\$HOME/.local/bin:\$PATH\")" ;;
@@ -449,7 +489,13 @@ cmd_status() {
     echo "roots:    ${#BASES[@]} base(s) -> ${#TARGETS[@]} repo(s)"
   fi
   local b="$HOME/.local/bin/wormhook-scan"
-  echo "cli link: $([[ -L "$b" ]] && echo "$b -> $(readlink "$b")" || echo 'not linked (install-cli)')"
+  if [[ -L "$b" ]]; then
+    echo "cli:      $b -> $(readlink "$b")  (legacy symlink — re-run install-cli)"
+  elif [[ -x "$b" ]]; then
+    echo "cli:      $b (launcher) -> $(cat "$PATHFILE" 2>/dev/null || echo '?')"
+  else
+    echo "cli:      not installed (install-cli)"
+  fi
   if [[ "$(uname -s)" == "Darwin" ]]; then
     launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1 && echo "launchd:  loaded ($LABEL)" || echo "launchd:  not loaded (install-launchd)"
   fi

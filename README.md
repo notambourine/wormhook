@@ -59,8 +59,9 @@ The fastest setup is from inside Claude Code: **`/wormhook-setup`** runs an inte
 installer. Or by hand:
 
 ```bash
-# link wormhook-scan onto your PATH (~/.local/bin)
-bash "$(claude plugin root wormhook 2>/dev/null || echo .)/scripts/wormhook-scan.sh" install-cli
+# put wormhook-scan on your PATH (~/.local/bin)
+bash "$(jq -r '[.plugins|to_entries[]|select(.key|startswith("wormhook@"))|.value[0].installPath][0] // "."' \
+  ~/.claude/plugins/installed_plugins.json 2>/dev/null)/scripts/wormhook-scan.sh" install-cli
 
 wormhook-scan ~/code/*/            # scan every git repo under ~/code (node_modules pruned)
 wormhook-scan                      # no args -> roots from your config (see below)

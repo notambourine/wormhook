@@ -518,6 +518,55 @@ OUT="$(bash "$CASE_DIR/scripts/doctor/integrity.sh" 2>/dev/null)"
 assert_jq "integrity: missing manifest degrades 🟡 (fail open, loud)" "$OUT" \
   '.systemMessage|contains("🟡") and contains("manifest missing")'
 
+# 10. VERSION-DRIFT DOCTOR LIGHT: it reads a plugins/cache/ layout no dev checkout has,
+# so it went dead for 16 releases unnoticed. Both install shapes are fixtures below.
+
+# _mkplug <root> <version> [name]: a minimal installed plugin tree with the real check.
+_mkplug() {
+  mkdir -p "$1/.claude-plugin" "$1/scripts/doctor"
+  cp "$REPO_ROOT/scripts/doctor/drift.sh" "$REPO_ROOT/scripts/doctor/_utils.sh" "$1/scripts/doctor/"
+  printf '{"name":"%s","version":"%s"}\n' "${3:-wormhook}" "$2" > "$1/.claude-plugin/plugin.json"
+}
+_drift() { CLAUDE_PLUGIN_ROOT="$1" bash "$1/scripts/doctor/drift.sh" 2>/dev/null; }
+
+# --- url-sourced catalog row (how notambourine/claude lists wormhook): the catalog
+#     clone holds no copy, so a newer sibling in the cache is the only local evidence.
+_mktemp_case
+P="$CASE_DIR/.claude/plugins"
+mkdir -p "$P/marketplaces/notambourine/.claude-plugin"
+printf '{"name":"notambourine","plugins":[{"name":"wormhook","source":{"source":"url","url":"u"}}]}\n' \
+  > "$P/marketplaces/notambourine/.claude-plugin/marketplace.json"
+_mkplug "$P/cache/notambourine/wormhook/0.9.0" 0.9.0
+_mkplug "$P/cache/notambourine/wormhook/0.26.0" 0.26.0
+assert_jq "drift: catalog install, stale copy flags 🟡 with the update command" \
+  "$(_drift "$P/cache/notambourine/wormhook/0.9.0")" \
+  '.systemMessage|contains("🟡") and contains("v0.9.0") and contains("v0.26.0") and contains("update wormhook@notambourine")'
+# 0.26.0 vs 0.9.0 is the trap a string compare gets backwards -- newest must stay silent.
+OUT="$(_drift "$P/cache/notambourine/wormhook/0.26.0")"
+if [[ -z "$OUT" ]]; then _ok "drift: newest copy is silent (0.26.0 outranks 0.9.0, not lexically)"
+else _bad "drift: newest copy is silent" "emitted: $OUT"; fi
+OUT="$(WORMHOOK_SKIP_DRIFT=1 CLAUDE_PLUGIN_ROOT="$P/cache/notambourine/wormhook/0.9.0" \
+  bash "$P/cache/notambourine/wormhook/0.9.0/scripts/doctor/drift.sh" 2>/dev/null)"
+assert_jq "drift: silenced lag degrades to ⚪, never to actual silence" "$OUT" \
+  '.systemMessage|contains("⚪") and contains("silenced")'
+
+# --- path-sourced row: the plugin IS vendored in the marketplace clone, so compare there.
+_mktemp_case
+P="$CASE_DIR/.claude/plugins"
+mkdir -p "$P/marketplaces/nt/.claude-plugin"
+printf '{"name":"nt","plugins":[{"name":"wormhook","source":"./plugins/wormhook"}]}\n' \
+  > "$P/marketplaces/nt/.claude-plugin/marketplace.json"
+_mkplug "$P/marketplaces/nt/plugins/wormhook" 0.30.0
+_mkplug "$P/cache/nt/wormhook/0.26.0" 0.26.0
+assert_jq "drift: path-sourced row compares against the marketplace clone" \
+  "$(_drift "$P/cache/nt/wormhook/0.26.0")" \
+  '.systemMessage|contains("🟡") and contains("v0.30.0")'
+
+# --- A dev checkout has no cache layout at all and must never emit.
+OUT="$(bash "$REPO_ROOT/scripts/doctor/drift.sh" 2>/dev/null)"
+if [[ -z "$OUT" ]]; then _ok "drift: dev checkout stays silent"
+else _bad "drift: dev checkout stays silent" "emitted: $OUT"; fi
+
 echo
 printf 'tests: %d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

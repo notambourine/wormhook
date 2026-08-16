@@ -45,16 +45,25 @@ jobs:
       - name: Install Claude Code CLI
         run: sfw npm install -g @anthropic-ai/claude-code
 
-      # Schema-validates marketplace.json, plugin.json, and skill/agent/hook
-      # frontmatter. --strict promotes unrecognized-field warnings to errors.
-      - name: Validate plugin + marketplace schema
-        run: claude plugin validate . --strict
-
-      # NB: the two description fields serve DIFFERENT roles by design and are NOT
-      # kept in sync -- marketplace.json carries a short browse-list tagline, plugin.json
-      # the full IOC detail shown at install/inspect time. There is intentionally no
-      # parity check (the platform has no shared-field mechanism, so a copy would only
-      # be drift waiting to happen). See CLAUDE.md "Invariants".
+      # Schema-validates plugin.json plus the skill/agent/hook frontmatter. --strict
+      # promotes unrecognized-field warnings to errors, and there is exactly ONE warning
+      # we accept: the root CLAUDE.md is maintainer context for this repo, not context
+      # shipped to a plugin consumer, and it stays at the root regardless. Allowlisting
+      # that one line (rather than dropping --strict) keeps every other warning red.
+      - name: Validate plugin schema
+        run: |
+          # GitHub runs `run:` under `bash -e`, so a bare assignment from a failing
+          # command would abort before the allowlist below ever reads its output.
+          rc=0; out=$(claude plugin validate . --strict 2>&1) || rc=$?
+          printf '%s\n' "$out"
+          findings=$(printf '%s\n' "$out" | grep '❯' | grep -v 'CLAUDE.md at the plugin root' || true)
+          if [ -n "$findings" ]; then
+            echo "::error::unexpected validate findings (see above)"; exit 1
+          fi
+          # Non-zero with no findings left means it failed for a reason we cannot allowlist.
+          if [ "$rc" -ne 0 ] && ! printf '%s\n' "$out" | grep -q 'CLAUDE.md at the plugin root'; then
+            exit "$rc"
+          fi
 
       # The hook is the whole product here -- lint it so a broken edit can't ship.
       - name: ShellCheck the scanner

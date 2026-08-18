@@ -303,7 +303,11 @@ jobs:
           # --redact so a finding never prints the credential into a public CI log.
           # No --validation: it is opt-in in the CLI and stays off -- a gate must not
           # phone vendor APIs with candidate secrets.
-          ./betterleaks git "$GITHUB_WORKSPACE" --no-banner --redact=100
+          # --confidence medium (needs betterleaks >=1.8.0) is what keeps this gate quiet
+          # as upstream broadens its rules: only the three generic rules grade a hit from
+          # its surrounding context, so a detection fixture lands below the bar and no
+          # rule that names an issuer is affected.
+          ./betterleaks git "$GITHUB_WORKSPACE" --no-banner --redact=100 --confidence medium
 
   # ── Complementary layer: shai-hulud-tripwire (committed-persistence artifacts) ──
   # wormhook's block tier DELIBERATELY does not flag generic secrets-context workflow

@@ -413,6 +413,16 @@ refreshes the cache), 🚨 findings. Non-gated commands stay silent.
   task that re-runs `setup.mjs` on every project open), poisoned git hooks
   (`init.templateDir`/`core.hooksPath`), `pull_request_target` workflows calling the
   `ci-quality/code-quality-check` action, `@semantic-release/exec` carrier injection.
+- **Prompt injection hidden in agent configs** (TrapDoor, May 2026) — `trap-core.js` plants a
+  `CLAUDE.md` or `.cursorrules` whose instructions are built from zero-width Unicode. Your
+  agent tokenizes every codepoint; your editor renders none of them, so a poisoned config
+  needs to execute nothing — it only has to be read. wormhook scans `CLAUDE.md`,
+  `.claude/CLAUDE.md`, `AGENTS.md`, and `.cursorrules` for U+200B/200C/200D/2060/FEFF on a
+  path that does not assume JSON, since the `jq` config scan structurally cannot read
+  markdown. An emoji ZWJ sequence and a leading byte-order mark are exempt (both need a
+  printable ASCII neighbour to match), which keeps a presence test block-safe. Prose configs
+  are checked for hidden codepoints **only**, never dropper tokens: a `CLAUDE.md` documenting
+  `curl … | sh` is a README, while a `settings.json` running one is wiring.
 - **Remote-eval loaders** — `atob(process.env.…)` + `eval`/`Function(await …)` behavioral
   fingerprints, plus field-observed C2/exfil hosts.
 - **Campaign-agnostic behaviors** (`node_modules` tier only) — decode-then-`eval`
@@ -499,6 +509,7 @@ mirrored in the header of [`scripts/wormhook.sh`](./scripts/wormhook.sh)):
 - **Wiz** — [Mini Shai-Hulud: TanStack & more](https://www.wiz.io/blog/mini-shai-hulud-strikes-again-tanstack-more-npm-packages-compromised)
 - **Semgrep** — [Axios supply-chain incident](https://semgrep.dev/blog/2026/axios-supply-chain-incident-indicators-of-compromise-and-how-to-contain-the-threat/)
 - **Socket** — [SANDWORM_MODE](https://socket.dev/blog/sandworm-mode-npm-worm-ai-toolchain-poisoning) · [Miasma & Hades (PyPI/MCP)](https://socket.dev/blog/mini-shai-hulud-miasma-and-hades-worms-target-bioinformatics-and-mcp-developers-via-malicious)
+- **Phoenix Security** — [TrapDoor: cross-ecosystem credential theft and AI-assistant poisoning](https://phoenix.security/trapdoor-supply-chain-ai-poisoning-npm-pypi-crates/) (zero-width Unicode in `CLAUDE.md` / `.cursorrules`)
 - **Checkmarx** — [npm hit by Shai-Hulud](https://checkmarx.com/zero-post/npm-hit-by-shai-hulud-the-self-replicating-supply-chain-attack/) (`shai-hulud-workflow.yml`, the `webhook.site` exfil ID)
 - **StepSecurity** — [Malicious node-ipc versions published to npm](https://www.stepsecurity.io/blog/node-ipc-npm-supply-chain-attack) (base-16 alphabet, HMAC key, `node-ipc.cjs` hash, `sh.azurestaticprovider.net`)
 - **Snyk** — [Mini Shai-Hulud hits AntV](https://snyk.io/blog/mini-shai-hulud-antv-npm-supply-chain-attack/) (`kitty-monitor`, `firedalazer`, `.vscode/tasks.json` `folderOpen`)

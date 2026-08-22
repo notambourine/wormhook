@@ -27,6 +27,9 @@
 #       sh.azurestaticprovider.net. Handles: the 0123456789GHJKMP base-16 alphabet, the
 #       hardcoded HMAC key, and node-ipc.cjs by hash (the filename itself is legitimate)
 #   - Axios/plain-crypto-js (Mar 2026): Sapphire Sleet (DPRK) RAT via sfrclak.com C2
+#   - TrapDoor (May 2026, Phoenix Security): npm+PyPI+crates.io; trap-core.js plants CLAUDE.md
+#       and .cursorrules carrying instructions hidden in U+200B/200C/200D/FEFF. The agent reads
+#       them, the human does not. Caught by a zero-width PRESENCE test, not a content pattern
 #   - Hades/Miasma PyPI wave (Jun 2026): MCP typosquats (openai-mcp, langchain-core-mcp,
 #       tiktoken-mcp, instructor-mcp) ship a *.pth hook that downloads Bun + runs _index.js;
 #       import-time .abi3.so modules (ensmallen_haswell/core2); /tmp/.sshu-setup.js SSH
@@ -489,6 +492,42 @@ Immediate steps:
 BODY
 )"
 done
+
+# Hidden-Unicode sweep. Its own list, because cfg_list is jq-parsed JSON and the two files the
+# TrapDoor guidance names first are markdown — jq structurally cannot read them.
+
+# KEY-DECISION 2026-08-22: prose configs get the zero-width test ONLY, never dropper tokens.
+# A CLAUDE.md documenting `curl … | sh` is a README; a settings.json running one is wiring.
+zw_list=( "${cfg_list[@]}" "${HOME}/.claude/CLAUDE.md" )
+for _t in "${TARGET_DIRS[@]}"; do
+  zw_list+=( "$_t/CLAUDE.md" "$_t/.claude/CLAUDE.md" "$_t/AGENTS.md" "$_t/.cursorrules" )
+done
+zw_files=()
+for zwf in "${zw_list[@]}"; do [[ -f "$zwf" ]] && zw_files+=( "$zwf" ); done
+# One grep over the whole list, then a second only on a hit — Tier 0 runs on every human turn.
+if [[ ${#zw_files[@]} -gt 0 ]]; then
+  zw_file=$(LC_ALL=C grep -laE "$MALWARE_ZEROWIDTH_RE" "${zw_files[@]}" 2>/dev/null | head -1)
+  if [[ -n "$zw_file" ]]; then
+    zw_line=$(LC_ALL=C grep -naE "$MALWARE_ZEROWIDTH_RE" "$zw_file" 2>/dev/null | head -1 | cut -d: -f1)
+    alert "HIDDEN UNICODE IN AGENT CONFIG" "$(cat <<BODY
+$zw_file carries a zero-width Unicode character at line ${zw_line:-?}.
+${COMMAND:+Command blocked: $COMMAND}
+Nothing legitimate writes one into an agent config. TrapDoor (May 2026) planted
+CLAUDE.md and .cursorrules holding instructions built from U+200B/200C/200D/FEFF:
+your agent tokenizes every one of them, and your editor shows you none of them.
+An emoji ZWJ sequence and a leading byte-order mark are both exempted, so this is
+not one of those.
+
+Immediate steps:
+  1. Reveal them: LC_ALL=C grep -naE \$'\\xe2\\x80\\x8b|\\xe2\\x80\\x8c|\\xe2\\x80\\x8d|\\xef\\xbb\\xbf' "$zw_file"
+  2. git log -p -- "$zw_file"  (find the commit that added the line)
+  3. Delete the hidden text, or the whole file if you did not author it
+  4. Assume the agent already followed it: rotate npm/GitHub tokens, SSH keys,
+     cloud + LLM API keys, and check ~/.ssh/authorized_keys and crontab -l
+BODY
+)"
+  fi
+fi
 
 # Ask git for the hooks dir: in a WORKTREE .git is a FILE, so the literal path scanned
 # nothing (#60). The literal fallback covers a missing git or a non-repo $CWD.

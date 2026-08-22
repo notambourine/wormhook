@@ -30,7 +30,10 @@
 #       M-RED-TEAM v6.4 / _miasma._tcp markers, IPFS-staged second stage (2 CIDs)
 #   - ChainDrop / keyv-cacheable (Aug 2026): keyv@6.0.0 preinstall -> setup.mjs loader +
 #       math_init.js payload (hash IOCs); C2 resolved from ETH contract 0xE1f2…3103 (the
-#       address is the on-disk constant; domains stay in the network layer)
+#       address is the on-disk constant; domains stay in the network layer). The four domains
+#       that contract has served (npm-cache.com, awqhnjewqjkl.icu, pypi-get.com, js-mirror.com)
+#       are a Tier-2 backstop only. Its Dune-themed strings are Base91-encoded at rest and
+#       never greppable — see the KEY-DECISION in malware-patterns.sh.
 #   - "A9-0522" build (Aug 2026, FIELD-OBSERVED — no vendor advisory): ChainDrop-lineage
 #       on-chain C2, appended to a repo's own tailwind.config.js behind ~500 spaces of padding.
 #       global.i="A9-0522-4" tag (dot form, which the Shai-Hulud 1.0 bracket regex missed);

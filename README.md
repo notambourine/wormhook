@@ -378,8 +378,12 @@ refreshes the cache), 🚨 findings. Non-gated commands stay silent.
 - **ChainDrop / keyv-cacheable wave** (Aug 2026) — the `setup.mjs` loader and
   `math_init.js` payload by SHA256 hash IOC, plus the Ethereum C2-resolution contract
   address embedded in the payload (`0xE1f2…3103`; the C2 *domains* resolve at runtime, so
-  they belong to a network blocklist, not a content grep). The wave's GitHub commit-search
-  fallback markers (`thebeautiful{march,snads}oftime`) were already covered.
+  the contract, not a domain, is the durable handle). The four domains that contract has
+  served — `npm-cache.com`, `awqhnjewqjkl.icu`, `pypi-get.com`, `js-mirror.com` — land as a
+  Tier-2 backstop for a build that hardcodes one. The wave's GitHub commit-search fallback
+  markers (`thebeautiful{march,snads}oftime`) were already covered. Its Dune-themed payload
+  strings are **not** covered and never will be: Unit 42 recovered them by decoding a Base91
+  table with 73 per-call alphabets, so no plaintext word reaches disk for a grep to find.
 - **"A9-0522" build** (Aug 2026, field-observed) — a ChainDrop-lineage payload appended to a
   repo's *own* `tailwind.config.js` behind ~500 spaces of padding, resolving its C2 from
   wallet `0xa322e5f3…` over public Ethereum RPC. Blocks on the dot-form campaign tag
@@ -486,7 +490,7 @@ mirrored in the header of [`scripts/wormhook.sh`](./scripts/wormhook.sh)):
 - **Semgrep** — [Axios supply-chain incident](https://semgrep.dev/blog/2026/axios-supply-chain-incident-indicators-of-compromise-and-how-to-contain-the-threat/)
 - **Socket** — [SANDWORM_MODE](https://socket.dev/blog/sandworm-mode-npm-worm-ai-toolchain-poisoning) · [Miasma & Hades (PyPI/MCP)](https://socket.dev/blog/mini-shai-hulud-miasma-and-hades-worms-target-bioinformatics-and-mcp-developers-via-malicious)
 - **Snyk** — [Mini Shai-Hulud hits AntV](https://snyk.io/blog/mini-shai-hulud-antv-npm-supply-chain-attack/) (`kitty-monitor`, `firedalazer`, `.vscode/tasks.json` `folderOpen`)
-- **Unit 42** — [Monitoring npm supply-chain attacks](https://unit42.paloaltonetworks.com/monitoring-npm-supply-chain-attacks/) (`audit.checkmarx.cx`, `OhNoWhatsGoingOnWithGitHub` C2)
+- **Unit 42** — [Monitoring npm supply-chain attacks](https://unit42.paloaltonetworks.com/monitoring-npm-supply-chain-attacks/) (`audit.checkmarx.cx`, `OhNoWhatsGoingOnWithGitHub` C2) · [Inside a self-propagating npm worm](https://unit42.paloaltonetworks.com/chaindrop-npm-worm-analysis/) (ChainDrop C2 domains, Base91 layering)
 - **Mend** — [Shai-Hulud SAP CAP via Claude Code](https://www.mend.io/blog/shai-hulud-sap-cap-supply-chain-attack-claude-code/) (`ctf-scramble-v2`, `__DAEMONIZED`, russian-locale kill-switch)
 - **Microsoft** — [AsyncAPI compromise & Miasma import-time payload](https://www.microsoft.com/en-us/security/blog/2026/07/15/unpacking-asyncapi-npm-supply-chain-compromise-import-time-payload-delivery/) (`miasma-train-p1`, `NodeJS/sync.js`, `.miasma`, IPFS CIDs) · [ChainDrop anatomy](https://www.microsoft.com/en-us/security/blog/2026/08/04/chaindrop-supply-chain-compromise-anatomy-self-propagating-worm/)
 - **Elastic** — [ChainDrop / keyv Shai-Hulud wave](https://www.elastic.co/security-labs/shai-hulud-chaindrop-npm-supply-chain) (payload hashes, ETH contract)

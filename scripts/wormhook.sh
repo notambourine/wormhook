@@ -498,7 +498,7 @@ done
 
 # KEY-DECISION 2026-08-22: prose configs get the zero-width test ONLY, never dropper tokens.
 # A CLAUDE.md documenting `curl … | sh` is a README; a settings.json running one is wiring.
-zw_list=( "${cfg_list[@]}" "${HOME}/.claude/CLAUDE.md" )
+zw_list=( "${cfg_list[@]}" "${HOME}/.claude/CLAUDE.md" "${HOME}/AGENTS.md" "${HOME}/.cursorrules" )
 for _t in "${TARGET_DIRS[@]}"; do
   zw_list+=( "$_t/CLAUDE.md" "$_t/.claude/CLAUDE.md" "$_t/AGENTS.md" "$_t/.cursorrules" )
 done
@@ -513,13 +513,13 @@ if [[ ${#zw_files[@]} -gt 0 ]]; then
 $zw_file carries a zero-width Unicode character at line ${zw_line:-?}.
 ${COMMAND:+Command blocked: $COMMAND}
 Nothing legitimate writes one into an agent config. TrapDoor (May 2026) planted
-CLAUDE.md and .cursorrules holding instructions built from U+200B/200C/200D/FEFF:
+CLAUDE.md and .cursorrules holding instructions built from U+200B/200C/200D/2060/FEFF:
 your agent tokenizes every one of them, and your editor shows you none of them.
-An emoji ZWJ sequence and a leading byte-order mark are both exempted, so this is
-not one of those.
+An emoji ZWJ sequence, a leading byte-order mark, and Persian/Urdu/Hindi U+200C
+orthography are all exempted, so this is not one of those.
 
 Immediate steps:
-  1. Reveal them: LC_ALL=C grep -naE \$'\\xe2\\x80\\x8b|\\xe2\\x80\\x8c|\\xe2\\x80\\x8d|\\xef\\xbb\\xbf' "$zw_file"
+  1. Reveal them: LC_ALL=C grep -naE \$'\\xe2\\x80\\x8b|\\xe2\\x80\\x8c|\\xe2\\x80\\x8d|\\xe2\\x81\\xa0|\\xef\\xbb\\xbf' "$zw_file"
   2. git log -p -- "$zw_file"  (find the commit that added the line)
   3. Delete the hidden text, or the whole file if you did not author it
   4. Assume the agent already followed it: rotate npm/GitHub tokens, SSH keys,

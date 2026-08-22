@@ -419,8 +419,9 @@ refreshes the cache), 🚨 findings. Non-gated commands stay silent.
   needs to execute nothing — it only has to be read. wormhook scans `CLAUDE.md`,
   `.claude/CLAUDE.md`, `AGENTS.md`, and `.cursorrules` for U+200B/200C/200D/2060/FEFF on a
   path that does not assume JSON, since the `jq` config scan structurally cannot read
-  markdown. An emoji ZWJ sequence and a leading byte-order mark are exempt (both need a
-  printable ASCII neighbour to match), which keeps a presence test block-safe. Prose configs
+  markdown. Only U+200B matches on its own; every other codepoint needs a printable ASCII
+  neighbour, which exempts emoji ZWJ, a leading byte-order mark, and the U+200C that
+  Persian/Urdu/Hindi prose spells words with — that is what keeps this block-safe. Prose configs
   are checked for hidden codepoints **only**, never dropper tokens: a `CLAUDE.md` documenting
   `curl … | sh` is a README, while a `settings.json` running one is wiring.
 - **Remote-eval loaders** — `atob(process.env.…)` + `eval`/`Function(await …)` behavioral

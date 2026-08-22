@@ -386,9 +386,9 @@ refreshes the cache), 🚨 findings. Non-gated commands stay silent.
   (`global.i="A9-0522-4"` — the Shai-Hulud 1.0 signature only matched the *bracket* form) and
   the `:443/0x/{cl,ls}` endpoints. Because `obfuscator.io` `splitStrings` chops every host
   into 10-char chunks, a reassembled domain matches nothing on disk — the unsplit tag, wallet
-  prefix, path, and `X-Payload-B6*` header are the handles. Two campaign-agnostic technique
-  markers land with it: a payload hidden behind a screen-width run of spaces, and the
-  `obfuscator.io` string-array accessor alias.
+  prefix, path, and `X-Payload-B6*` header are the handles. The `obfuscator.io` string-array
+  accessor alias lands with it as a campaign-agnostic technique marker. The padding itself
+  stays unmatched: `eslint-plugin-import` ships Babel output with 912-space runs.
 - **Miasma RAT / AsyncAPI compromise** (`miasma-train-p1`, Jul 2026) — an import-time
   loader that runs on `require()` and defeats `--ignore-scripts`; Tier-0 persistence
   checks for `NodeJS/sync.js`, the `~/.config/.miasma` lock dir, and the `miasma-monitor`

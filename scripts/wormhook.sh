@@ -31,6 +31,12 @@
 #   - ChainDrop / keyv-cacheable (Aug 2026): keyv@6.0.0 preinstall -> setup.mjs loader +
 #       math_init.js payload (hash IOCs); C2 resolved from ETH contract 0xE1f2…3103 (the
 #       address is the on-disk constant; domains stay in the network layer)
+#   - "A9-0522" build (Aug 2026, FIELD-OBSERVED — no vendor advisory): ChainDrop-lineage
+#       on-chain C2, appended to a repo's own tailwind.config.js behind ~500 spaces of padding.
+#       global.i="A9-0522-4" tag (dot form, which the Shai-Hulud 1.0 bracket regex missed);
+#       C2 resolved from wallet 0xa322e5f3… via public Ethereum RPC + blockscout tx lists;
+#       :443/0x/{cl,ls} endpoints behind an X-Payload-B6* header. obfuscator.io splitStrings
+#       chunks every host, so the unsplit tag/wallet/path literals are the only on-disk handles.
 #   - Remote-eval loader (recurring): atob(process.env.FAKE_KEY) -> fetch -> eval
 #   - CISA: https://www.cisa.gov/news-events/alerts/2025/09/23/widespread-supply-chain-compromise-impacting-npm-ecosystem
 #   - Datadog: https://securitylabs.datadoghq.com/articles/shai-hulud-2.0-npm-worm/

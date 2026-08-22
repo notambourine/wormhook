@@ -380,6 +380,15 @@ refreshes the cache), 🚨 findings. Non-gated commands stay silent.
   address embedded in the payload (`0xE1f2…3103`; the C2 *domains* resolve at runtime, so
   they belong to a network blocklist, not a content grep). The wave's GitHub commit-search
   fallback markers (`thebeautiful{march,snads}oftime`) were already covered.
+- **"A9-0522" build** (Aug 2026, field-observed) — a ChainDrop-lineage payload appended to a
+  repo's *own* `tailwind.config.js` behind ~500 spaces of padding, resolving its C2 from
+  wallet `0xa322e5f3…` over public Ethereum RPC. Blocks on the dot-form campaign tag
+  (`global.i="A9-0522-4"` — the Shai-Hulud 1.0 signature only matched the *bracket* form) and
+  the `:443/0x/{cl,ls}` endpoints. Because `obfuscator.io` `splitStrings` chops every host
+  into 10-char chunks, a reassembled domain matches nothing on disk — the unsplit tag, wallet
+  prefix, path, and `X-Payload-B6*` header are the handles. Two campaign-agnostic technique
+  markers land with it: a payload hidden behind a screen-width run of spaces, and the
+  `obfuscator.io` string-array accessor alias.
 - **Miasma RAT / AsyncAPI compromise** (`miasma-train-p1`, Jul 2026) — an import-time
   loader that runs on `require()` and defeats `--ignore-scripts`; Tier-0 persistence
   checks for `NodeJS/sync.js`, the `~/.config/.miasma` lock dir, and the `miasma-monitor`
@@ -482,6 +491,10 @@ mirrored in the header of [`scripts/wormhook.sh`](./scripts/wormhook.sh)):
 - **Microsoft** — [AsyncAPI compromise & Miasma import-time payload](https://www.microsoft.com/en-us/security/blog/2026/07/15/unpacking-asyncapi-npm-supply-chain-compromise-import-time-payload-delivery/) (`miasma-train-p1`, `NodeJS/sync.js`, `.miasma`, IPFS CIDs) · [ChainDrop anatomy](https://www.microsoft.com/en-us/security/blog/2026/08/04/chaindrop-supply-chain-compromise-anatomy-self-propagating-worm/)
 - **Elastic** — [ChainDrop / keyv Shai-Hulud wave](https://www.elastic.co/security-labs/shai-hulud-chaindrop-npm-supply-chain) (payload hashes, ETH contract)
 - **JFrog** — [Shai-Hulud is back (Aug 2026)](https://research.jfrog.com/post/shai-hulud-is-back-august/) (`math_init.js` hash pairing, runtime C2 resolution)
+- **Field-observed, no advisory** — the "A9-0522" build. Its markers sit a provenance tier
+  below every entry above (same class as `api.masscan.cloud` and `m-kosche.com`): they come
+  from a sample recovered off a compromised account, not a named vendor page, so only the
+  two zero-FP-verified markers reach the blocking tier and the rest stay warn-only.
 
 ## License
 

@@ -359,7 +359,10 @@ refreshes the cache), 🚨 findings. Non-gated commands stay silent.
 ## What it detects
 
 - **Shai-Hulud 1.0–3.0 + the Mini variant** — obfuscation markers, runner fingerprints,
-  ransom tokens, `git-tanstack` typosquat exfil, payload filenames, SHA256 IOCs.
+  ransom tokens, `git-tanstack` typosquat exfil, payload filenames, SHA256 IOCs. The v1
+  `shai-hulud-workflow.yml` dropper is matched by **basename**, since Checkmarx published its
+  name but never its body — a content grep alone cannot see it. Its `webhook.site` exfil ID
+  lands as a content fingerprint; the bare domain would not, it FPs on real test fixtures.
 - **SAP-CAP / AntV / TeamPCP wave** (Apr–Jun 2026) — the unique payload-internal strings
   (`ctf-scramble-v2` PBKDF2 salt, the `firedalazer` / `OhNoWhatsGoingOnWithGitHub` GitHub-
   commit-search C2 keywords, the `__DAEMONIZED` guard, the russian-locale kill-switch),
@@ -496,6 +499,7 @@ mirrored in the header of [`scripts/wormhook.sh`](./scripts/wormhook.sh)):
 - **Wiz** — [Mini Shai-Hulud: TanStack & more](https://www.wiz.io/blog/mini-shai-hulud-strikes-again-tanstack-more-npm-packages-compromised)
 - **Semgrep** — [Axios supply-chain incident](https://semgrep.dev/blog/2026/axios-supply-chain-incident-indicators-of-compromise-and-how-to-contain-the-threat/)
 - **Socket** — [SANDWORM_MODE](https://socket.dev/blog/sandworm-mode-npm-worm-ai-toolchain-poisoning) · [Miasma & Hades (PyPI/MCP)](https://socket.dev/blog/mini-shai-hulud-miasma-and-hades-worms-target-bioinformatics-and-mcp-developers-via-malicious)
+- **Checkmarx** — [npm hit by Shai-Hulud](https://checkmarx.com/zero-post/npm-hit-by-shai-hulud-the-self-replicating-supply-chain-attack/) (`shai-hulud-workflow.yml`, the `webhook.site` exfil ID)
 - **StepSecurity** — [Malicious node-ipc versions published to npm](https://www.stepsecurity.io/blog/node-ipc-npm-supply-chain-attack) (base-16 alphabet, HMAC key, `node-ipc.cjs` hash, `sh.azurestaticprovider.net`)
 - **Snyk** — [Mini Shai-Hulud hits AntV](https://snyk.io/blog/mini-shai-hulud-antv-npm-supply-chain-attack/) (`kitty-monitor`, `firedalazer`, `.vscode/tasks.json` `folderOpen`)
 - **Unit 42** — [Monitoring npm supply-chain attacks](https://unit42.paloaltonetworks.com/monitoring-npm-supply-chain-attacks/) (`audit.checkmarx.cx`, `OhNoWhatsGoingOnWithGitHub` C2) · [Inside a self-propagating npm worm](https://unit42.paloaltonetworks.com/chaindrop-npm-worm-analysis/) (ChainDrop C2 domains, Base91 layering)

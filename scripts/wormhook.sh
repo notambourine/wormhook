@@ -11,7 +11,9 @@
 # site-packages hook, and the UserPromptSubmit monitor re-runs T0+T1 every human turn.
 #
 # Sources:
-#   - Shai-Hulud 1.0 (Sep 2025): global['!']=X-YYYY fingerprint, crypto drainer
+#   - Shai-Hulud 1.0 (Sep 2025): global['!']=X-YYYY fingerprint, crypto drainer, the
+#       shai-hulud-workflow.yml dropper (Checkmarx published the name only, so it is caught
+#       by basename) and the webhook.site exfil ID the bundle.js POSTs to
 #   - Shai-Hulud 2.0 (Nov 2025): self-replicating worm, GitHub exfil, 796 packages
 #   - Shai-Hulud 3.0 (Dec 2025): enhanced obfuscation, "Goldox-T3chs" marker, c0nt3nts.json
 #   - Mini Shai-Hulud (Apr-Jun 2026): npm+PyPI; TanStack/SAP-CAP/AntV/TeamPCP; git-tanstack.com
@@ -695,18 +697,24 @@ BODY
   for _t in "${TARGET_DIRS[@]}"; do
     [[ -d "$_t/.github/workflows" ]] || continue
     wf_hit=$(grep -rilE "$MALWARE_WORKFLOW_RE" "$_t/.github/workflows" 2>/dev/null | head -1)
+    # A dropper whose body was never published is reachable only by name (#84).
+    [[ -n "$wf_hit" ]] || wf_hit=$(find "$_t/.github/workflows" -type f 2>/dev/null \
+      | grep -iE "$MALWARE_WORKFLOW_NAME_RE" | head -1)
     if [[ -n "$wf_hit" ]]; then
       alert "MALICIOUS GITHUB ACTIONS WORKFLOW" "$(cat <<BODY
-$wf_hit references a known supply-chain campaign action / marker.
+$wf_hit is a known campaign dropper by name, or references a campaign marker.
 ${COMMAND:+Command blocked: $COMMAND}
 SANDWORM_MODE injects a workflow (often pull_request_target, so it runs with repo
 secrets on untrusted PR code) that calls ci-quality/code-quality-check to exfiltrate
-secrets.
+secrets. Shai-Hulud 1.0 writes shai-hulud-workflow.yml into every repo a stolen
+token can reach and POSTs the secrets to webhook.site.
 
 Immediate steps:
   1. git log -p -- "$wf_hit"
   2. Remove the workflow and any pull_request_target job that builds untrusted PR code
   3. Rotate ALL repository + org secrets (Actions secrets, OIDC trusts, deploy keys)
+  4. Rotating alone is not enough: while the workflow is committed, the next CI run
+     leaks the new secrets too. Remove it first.
 BODY
 )"
     fi

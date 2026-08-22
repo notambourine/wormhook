@@ -369,6 +369,13 @@ refreshes the cache), 🚨 findings. Non-gated commands stay silent.
   persistence, `sfrclak` C2 beacons.
 - **SANDWORM_MODE** — AI-toolchain poisoning: the marker, `*.workers.dev/{exfil,drain}`
   C2, `freefan`/`fanfree` DNS-tunnel domains, the drain bearer token.
+- **node-ipc credential stealer** (May 2026) — three releases carried the same 80 KB
+  obfuscated IIFE appended to `node-ipc.cjs`, firing on every `require()` with no lifecycle
+  hook to gate. Caught by the payload's custom base-16 alphabet (`0123456789GHJKMP`), its
+  hardcoded HMAC key, and its `sh.azurestaticprovider.net` DNS-tunnel C2, plus `node-ipc.cjs`
+  by name **and** hash — the filename is the real package's own entry point. The three
+  affected version numbers are deliberately not encoded here; version-pinned blocking is
+  [Socket Firewall's and `vet`'s job](#what-it-deliberately-doesnt-do).
 - **Hades / Miasma PyPI wave** (Jun 2026) — MCP typosquats (`openai-mcp`, `tiktoken-mcp`,
   …) shipping a weaponized Python `.pth` startup hook (→ Bun → `_index.js` Hades stealer)
   and native import-time `.abi3.so` modules (`ensmallen_haswell`/`core2`) that execute on
@@ -489,6 +496,7 @@ mirrored in the header of [`scripts/wormhook.sh`](./scripts/wormhook.sh)):
 - **Wiz** — [Mini Shai-Hulud: TanStack & more](https://www.wiz.io/blog/mini-shai-hulud-strikes-again-tanstack-more-npm-packages-compromised)
 - **Semgrep** — [Axios supply-chain incident](https://semgrep.dev/blog/2026/axios-supply-chain-incident-indicators-of-compromise-and-how-to-contain-the-threat/)
 - **Socket** — [SANDWORM_MODE](https://socket.dev/blog/sandworm-mode-npm-worm-ai-toolchain-poisoning) · [Miasma & Hades (PyPI/MCP)](https://socket.dev/blog/mini-shai-hulud-miasma-and-hades-worms-target-bioinformatics-and-mcp-developers-via-malicious)
+- **StepSecurity** — [Malicious node-ipc versions published to npm](https://www.stepsecurity.io/blog/node-ipc-npm-supply-chain-attack) (base-16 alphabet, HMAC key, `node-ipc.cjs` hash, `sh.azurestaticprovider.net`)
 - **Snyk** — [Mini Shai-Hulud hits AntV](https://snyk.io/blog/mini-shai-hulud-antv-npm-supply-chain-attack/) (`kitty-monitor`, `firedalazer`, `.vscode/tasks.json` `folderOpen`)
 - **Unit 42** — [Monitoring npm supply-chain attacks](https://unit42.paloaltonetworks.com/monitoring-npm-supply-chain-attacks/) (`audit.checkmarx.cx`, `OhNoWhatsGoingOnWithGitHub` C2) · [Inside a self-propagating npm worm](https://unit42.paloaltonetworks.com/chaindrop-npm-worm-analysis/) (ChainDrop C2 domains, Base91 layering)
 - **Mend** — [Shai-Hulud SAP CAP via Claude Code](https://www.mend.io/blog/shai-hulud-sap-cap-supply-chain-attack-claude-code/) (`ctf-scramble-v2`, `__DAEMONIZED`, russian-locale kill-switch)

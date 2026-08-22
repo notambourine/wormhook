@@ -20,6 +20,10 @@
 #       ctf-scramble-v2 salt, firedalazer / OhNoWhatsGoingOnWithGitHub C2, __DAEMONIZED guard,
 #       russian-locale kill-switch, audit.checkmarx.cx C2
 #   - SANDWORM_MODE (Feb 2026): AI toolchain poisoning, MCP injection, SSH propagation
+#   - node-ipc (May 2026, StepSecurity): an 80KB obfuscated stealer appended as an IIFE to
+#       node-ipc.cjs, so it runs on require() with no lifecycle hook; DNS-tunnel exfil to
+#       sh.azurestaticprovider.net. Handles: the 0123456789GHJKMP base-16 alphabet, the
+#       hardcoded HMAC key, and node-ipc.cjs by hash (the filename itself is legitimate)
 #   - Axios/plain-crypto-js (Mar 2026): Sapphire Sleet (DPRK) RAT via sfrclak.com C2
 #   - Hades/Miasma PyPI wave (Jun 2026): MCP typosquats (openai-mcp, langchain-core-mcp,
 #       tiktoken-mcp, instructor-mcp) ship a *.pth hook that downloads Bun + runs _index.js;
@@ -759,7 +763,7 @@ PAYLOAD_FILES=(
   "c0nt3nts.json" "c9nt3nts.json" "3nvir0nm3nt.json" "cl0vd.json"
   "actionsSecrets.json" "truffleSecrets.json" "gh-token-monitor.sh"
 )
-HASH_IOC_FILES=( "router_init.js" "router_runtime.js" "tanstack_runner.js" "opensearch_init.js" "setup_bun.js" "bun_environment.js" "math_init.js" "Math_Symbol.js" "setup.mjs" )
+HASH_IOC_FILES=( "router_init.js" "router_runtime.js" "tanstack_runner.js" "opensearch_init.js" "setup_bun.js" "bun_environment.js" "math_init.js" "Math_Symbol.js" "setup.mjs" "node-ipc.cjs" )
 HASH_IOC_HASHES=(
   "ab4fcadaec49c03278063dd269ea5eef82d24f2124a8e15d7b90f2fa8601266c"
   "2ec78d556d696e208927cc503d48e4b5eb56b31abc2870c2ed2e98d6be27fc96"
@@ -773,6 +777,8 @@ HASH_IOC_HASHES=(
   "9fc2570b7cef51c1b8df116d144d11ff4096357be7d2c4c6367cfc2509cf1bcc"
   "fd3ca4007b225fdf8de7af4345a19179d5efa8c4bb9205f88cda806e5684b1eb"
   "54dc7ea54a1317cca0e890a2770630cf7fa6c97813e0cb9d2caa93012b350668"
+  # node-ipc (May 2026): node-ipc.cjs is the real package's CJS entry, so name+hash, not name.
+  "96097e0612d9575cb133021017fb1a5c68a03b60f9f3d24ebdc0e628d9034144"
 )
 
 if [[ "$RUN_T2" == 1 && -d "$NODE_MODULES" ]]; then

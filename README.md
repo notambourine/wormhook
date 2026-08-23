@@ -1,18 +1,18 @@
 # wormhook
 
-A Claude Code plugin that blocks npm/node supply-chain malware at the tool hook, before it
-runs. It denies `npm`/`pnpm`/`yarn`/`bun`/`npx`/`node` commands that hit a known indicator of
-compromise. Named for Shai-Hulud, the self-replicating npm worm.
+wormhook blocks known npm, Node.js, and landed PyPI supply-chain malware before Claude Code
+runs it. It denies `npm`, `pnpm`, `yarn`, `bun`, `npx`, and `node` commands when a local scan
+finds an indicator of compromise.
 
-It covers one layer: agent-boundary persistence (AGENT-HIJACK). Rogue `SessionStart` hooks
-and `mcpServers` entries injected into `.claude`/`.cursor`/`.continue`/`.vscode` configs,
-`.vscode/tasks.json` `folderOpen` auto-exec, weaponized Python `.pth` startup hooks, poisoned
-git hooks, and login-persistent LaunchAgent/systemd units. Registry-layer tools do not see
-that half of the kill chain, and it re-runs every time you open the project.
+Its focus is agent-boundary persistence: rogue hooks and MCP servers in editor configs,
+`folderOpen` tasks, weaponized Python `.pth` files, poisoned git hooks, and persistent
+LaunchAgent or systemd units. These mechanisms survive across sessions and sit outside the
+registry layer.
 
-The install layer is already well served, so wormhook cedes it and runs alongside pnpm 11's
-release-age [cooldown](https://pnpm.io/supply-chain-security),
-[Socket Firewall](https://socket.dev/), and [`safedep/vet`](https://github.com/safedep/vet).
+Use wormhook with pnpm 11's release-age [cooldown](https://pnpm.io/supply-chain-security),
+[Socket Firewall](https://socket.dev/), or [`safedep/vet`](https://github.com/safedep/vet)
+for install-time and registry intelligence. The name comes from Shai-Hulud, the
+self-replicating npm worm.
 
 Built and maintained by [NoTambourine](https://notambourine.com).
 
@@ -23,7 +23,7 @@ claude plugin marketplace add notambourine/claude
 claude plugin install wormhook@notambourine --scope user
 ```
 
-Already on `wormhook@wormhook`? A marketplace has no rename path, so remove the old one first:
+Migrating from `wormhook@wormhook` requires removing the old marketplace first:
 
 ```bash
 claude plugin uninstall wormhook@wormhook
@@ -32,24 +32,21 @@ claude plugin marketplace add notambourine/claude
 claude plugin install wormhook@notambourine --scope user
 ```
 
-Requires `jq` and `bash`. Content scans use
-[`ripgrep`](https://github.com/BurntSushi/ripgrep) when present (43x faster than BSD grep on
-large trees) and fall back to `grep`.
+Requires `jq` and `bash`. Content scans prefer
+[`ripgrep`](https://github.com/BurntSushi/ripgrep) and fall back to `grep`.
 
-There is nothing to invoke. At `SessionStart` a doctor checks runtime deps,
+No command is required after installation. At `SessionStart`, a doctor checks runtime deps,
 [engine self-integrity](#threat-model-the-scanner-as-a-target), version drift,
 signature-corpus age, out-of-band coverage, CI gate coverage,
 [companion firewalls](#beyond-the-tiers), and
-[credential exposure](#blast-radius-exposure-audit). Each check is silent when healthy and
-otherwise prints the one-liner that fixes it, so a quiet launch is a clean one.
+[credential exposure](#blast-radius-exposure-audit). Healthy checks stay silent. Unhealthy
+checks print one repair command.
 
 ## Run it outside Claude
 
-`wormhook-scan` runs the same engine (Tiers 0-2, same `malware-patterns.sh`) from any shell.
-It is a thin adapter with no duplicated detection, so every signature update reaches it for
-free.
+`wormhook-scan` exposes the same engine and signature set in any shell.
 
-Run **`/wormhook-setup`** inside Claude Code for an interactive installer, or by hand:
+Run **`/wormhook-setup`** in Claude Code for an interactive install, or install it manually:
 
 ```bash
 # put wormhook-scan on your PATH (~/.local/bin)
@@ -62,16 +59,15 @@ wormhook-scan --deep ~/code/myapp  # force the Tier-2 node_modules walk
 wormhook-scan --persistence        # only the machine-wide ($HOME) persistence checks
 ```
 
-Each path resolves to the git repo(s) at or under it, so point at parents. An org dir expands
-to its repos; `node_modules` is pruned. A machine-wide finding (a poisoned `~/.claude`, a
-rogue LaunchAgent) is reported once at the top, not per repo. Exit codes gate a script or CI
-step: `0` clean, `1` critical or machine persistence, `2` degraded.
+Each path expands to the Git repositories at or below it, with `node_modules` pruned. A
+machine-wide finding appears once instead of once per repository. Exit codes are `0` for
+clean, `1` for critical or machine persistence, and `2` for degraded coverage.
 
-**Config.** With no path args, `wormhook-scan` reads newline-delimited paths and globs from
+With no path arguments, `wormhook-scan` reads newline-delimited paths and globs from
 `${XDG_CONFIG_HOME:-~/.config}/wormhook/scan-roots` (or `$WORMHOOK_SCAN_ROOTS`).
 `wormhook-scan config --init` seeds a commented sample.
 
-**Two automatic triggers**, both opt-in, both local, zero tokens:
+Two local, opt-in triggers run without Claude or LLM tokens:
 
 ```bash
 wormhook-scan install-launchd            # hourly background sweep (macOS launchd)
@@ -80,33 +76,32 @@ wormhook-scan install-git-hook           # post-merge/checkout/rewrite audit on 
                                          #   `git pull` in ANY terminal (not just Claude)
 ```
 
-`install-launchd` runs a native LaunchAgent on a timer with no Claude session and no LLM
-tokens. On Linux it prints a systemd-timer or cron line instead.
+`install-launchd` creates a native macOS LaunchAgent. On Linux, it prints an equivalent
+systemd timer or cron entry.
 
-`install-git-hook` cooperates with an existing `core.hooksPath` and never clobbers a hook you
-already have. Each `git pull`/`checkout` prints **`🟢 wormhook: <repo> clean`** or a red
-report of what changed plus any IOC, so you see it before `npm run dev`. The changed-file
-list is capped at 20 because a `git pull` inside Claude Code puts it in the model's context;
-the trailing `N files changed` line gives the true total.
+`install-git-hook` preserves an existing `core.hooksPath` and existing hooks. Each pull or
+checkout prints **`🟢 wormhook: <repo> clean`** or a finding report before the new code runs.
+Changed-file output is capped at 20 entries; the final count remains exact.
 
 `wormhook-scan status` shows what is installed. `uninstall-launchd` and `uninstall-git-hook`
 reverse cleanly.
 
-**Optional exec-guard.** A post-merge hook only warns; it cannot stop files that already
-landed. To refuse to *run* on a compromised repo outside Claude:
+### Optional shell guard
+
+A post-merge hook can only warn after files land. Add this to refuse package-manager commands
+in a compromised repository outside Claude:
 
 ```bash
 eval "$(wormhook-scan shell-init)"   # in ~/.zshrc/.bashrc, AFTER any nvm/asdf
 ```
 
-It wraps `npm`/`pnpm`/`yarn`/`bun`/`npx` (not `node`) so they fast-scan the current repo and
-refuse if it trips the engine, catching IOCs that arrived without a git pull. **It is a
-tripwire, not a sandbox:** `command npm` or a direct `./node_modules/.bin/...` bypasses it,
-and it fails open if `wormhook-scan` is absent.
+The guard wraps `npm`, `pnpm`, `yarn`, `bun`, and `npx`, but not `node`. It fast-scans the
+current repository and refuses the command on a hit. It is a tripwire, not a sandbox:
+`command npm` and direct `node_modules/.bin` execution bypass it, and a missing
+`wormhook-scan` fails open.
 
-**Already using Socket Firewall?** Do not keep a separate `npm() { sfw npm ... }` block. It
-and the guard define the same names, so whichever loads last silently clobbers the other.
-Chain them in one wrapper, each layer fail-open. `/wormhook-setup` prints this block:
+When using Socket Firewall, chain both tools in one wrapper. Separate wrappers define the
+same function names, so the last one loaded wins. `/wormhook-setup` prints this block:
 
 ```bash
 eval "$(wormhook-scan shell-init)"   # defines __wormhook_guard
@@ -123,10 +118,10 @@ for pm in npm pnpm yarn bun npx; do eval "${pm}() { __sc_run ${pm} \"\$@\"; }"; 
 
 ### Opt-in quarantine
 
-A Tier-0 finding means the payload already ran, and by default the artifact keeps working
-until a human acts. `WORMHOOK_QUARANTINE=1` contains the exact-match artifacts only: the
-known persistence paths (droppers, LaunchAgents, `~/.dev-env`), a `.pth` matching the
-known-bad name or SHA-256, and the known-bad `.abi3.so` basenames.
+A Tier-0 finding means the payload may already have run. By default, wormhook reports the
+artifact and leaves containment to a human. `WORMHOOK_QUARANTINE=1` instead contains only
+exact matches: known persistence paths, a `.pth` with a known-bad name or SHA-256, and
+known-bad `.abi3.so` basenames.
 
 ```bash
 wormhook-scan --quarantine                    # one fleet scan with containment
@@ -134,14 +129,13 @@ wormhook-scan install-launchd --quarantine    # the hourly sweep contains at 03:
 # in Claude Code: settings.json -> "env": { "WORMHOOK_QUARANTINE": "1" }
 ```
 
-Containment renames the artifact to `<path>.wormhook-quarantined.<epoch>` and `chmod 000`s
-it: reversible, forensics-preserving, and dead on the next login or interpreter start.
-Nothing is killed, unloaded, or deleted. Behavioral matches stay report-only, since an
-unattended rename demands exact-match confidence. A root-owned artifact degrades to the
-normal advisory. Every action is logged to
+Containment renames the artifact to `<path>.wormhook-quarantined.<epoch>` and applies
+`chmod 000`. It does not kill processes, unload services, or delete files. Behavioral
+matches remain report-only. Root-owned artifacts fall back to the normal advisory. Actions
+are logged to
 `~/.cache/notambourine/malware-scan/quarantine.log`.
 
-It is off by default everywhere, because containment inverts the fail-open bias.
+Quarantine is off by default to preserve the fail-open policy.
 
 ### Gate pull requests on GitHub (Action)
 
@@ -166,87 +160,75 @@ jobs:
         #   fail-on: critical  # critical (default) | degraded (fail-closed on 🟡 too)
 ```
 
-A 🚨 verdict fails the job (exit `1`) and prints the finding banner above the error
-annotation. A 🟡 degraded scan passes unless you set `fail-on: degraded`. Like every other
-trigger it is zero-network: `stat`, `grep`, and `jq` over the tree.
+A 🚨 verdict fails the job with exit code `1`. A 🟡 degraded scan passes unless
+`fail-on: degraded` is set. The action makes no network calls; it uses `stat`, `grep`, and
+`jq` against the checked-out tree.
 
-**Pinning.** Pin the commit a release tag points at and put that tag in a trailing comment,
-so Dependabot version-tracks the action and opens one PR per wormhook release:
+Pin the commit behind a release tag and keep the tag in a trailing comment. Dependabot can
+then track wormhook releases:
 
 ```sh
 gh release view --repo notambourine/wormhook --json tagName,targetCommitish
 ```
 
-Pinning a branch-head SHA that no tag points at is the failure mode: Dependabot resolves no
-version, falls back to tracking `main`, and opens a PR for every commit in this repo.
+Do not pin an untagged branch-head SHA. Dependabot cannot resolve its version and may track
+every commit on `main`.
 
-**This gates the merge, not the push.** github.com has no `pre-receive` hook (GitHub
-Enterprise Server only), so pair the action as a required status check with a ruleset that
-blocks force pushes and requires a PR. Malware can sit on a feature branch; the failing check
-stops the merge.
+This gates merges, not pushes. Pair the action with a ruleset that requires its status check,
+requires pull requests, and blocks force pushes. GitHub.com does not expose `pre-receive`
+hooks.
 
 ## How it works
 
-The scan is tiered by cost times volatility, so the expensive part only runs when it can find
-something new.
+The scanner spends work where the result can change:
 
-- **Tier 0, persistence and agent/dev-env injection.** Cheap stats, every event, never
-  cached. RAT droppers (`com.apple.act.mond`), runner installs (`~/.dev-env`), agent-hijack
-  droppers and rogue `mcpServers`/`hooks` entries across Claude Code/Cursor/Continue/
-  Windsurf, poisoned git hooks, `gh-token-monitor` units, weaponized Python `.pth` startup
-  hooks.
-- **Tier 1, project source, `package.json` lifecycle, and CI config.** Cheap, every gated
+- **Tier 0: persistence and agent injection.** Runs on every event and is never cached. It
+  checks RAT droppers, runner installs, rogue MCP servers and hooks across supported editors,
+  poisoned git hooks, persistent units, and weaponized Python `.pth` files.
+- **Tier 1: project source, lifecycle scripts, and CI config.** Runs on every gated
   event. Install-lifecycle scripts, injected loaders in the source tree, `.github/workflows`
   and `.releaserc` poisoning. This tier blocks an install before it can run a dropper. It
   reads the manifest of the directory the command actually targets (`cd sub && npm install`,
   `npm --prefix`, `yarn --cwd`) and every workspace package's manifest (`workspaces` globs
   plus `pnpm-workspace.yaml`), because a root install runs each workspace's lifecycle.
   Compound and env-prefixed commands (`CI=1 npm install`) gate too.
-- **Tier 2, `node_modules` content and IOC scan.** Expensive. Runs only when deps changed
+- **Tier 2: `node_modules` content and IOC scan.** Runs only when dependencies change
   (keyed off lockfile hash plus `node_modules` dir mtimes 2 levels deep, cached under
   `~/.cache/notambourine/`) or when the last clean scan is older than 24 hours
-  (`WORMHOOK_T2_TTL_HOURS`). The key cannot see an in-place overwrite of an existing dep file,
-  so the cache ages out to bound that window. It fails open: a scan that hits its `timeout`
-  reports 🟡, does not refresh the cache, and never blocks your launch.
+  (`WORMHOOK_T2_TTL_HOURS`). The TTL bounds the cache's inability to detect an in-place
+  overwrite. A timeout reports 🟡, leaves the cache stale, and fails open.
 
 ### Beyond the tiers
 
-- **Python execution gating.** `pip`/`pip3`/`pipx`/`uv`/`python`/`python3` trigger the Tier-0
-  sweep at `PreToolUse`, so the `.pth` startup-hook check runs before the interpreter
-  auto-executes a poisoned site-packages `.pth` (the Hades/Miasma PyPI vector). The sweep
-  covers project venvs, the active `$VIRTUAL_ENV`/`$CONDA_PREFIX`, and the user and global
-  site-packages a no-venv `pip install` lands in (`~/.local`, macOS `~/Library/Python`,
-  Homebrew, `/usr/local`, python.org framework, every pyenv version, uv-managed
-  interpreters). This gates execution to run the persistence scan early; it does not audit
-  PyPI package contents.
-- **`UserPromptSubmit` continuous monitor.** T0 and T1 re-run every human turn and, unlike
-  `SessionStart`, can block. Persistence planted mid-session by a `pip install` or an agent
-  file-write is caught at the next prompt rather than the next npm or git command. Silent
-  when clean, since it would otherwise spam the transcript.
-- **Companion-firewall nudge.** Blocking malicious or too-new package *versions* needs
+- **Python execution gate.** `pip`, `pip3`, `pipx`, `uv`, `python`, and `python3` trigger
+  Tier 0 before execution. This catches a poisoned `.pth` before Python loads it. Coverage
+  includes project environments, active virtual or Conda environments, and common user and
+  global site-package locations for macOS, Homebrew, `/usr/local`, python.org, pyenv, and uv.
+  This is an early persistence check, not a PyPI package audit.
+- **Continuous prompt monitor.** Tiers 0 and 1 run on every human turn. A payload written
+  mid-session is caught at the next prompt, even if no package-manager or git command runs.
+  Clean results stay silent; findings block.
+- **Companion firewall check.** Blocking malicious or too-new package versions needs
   registry intelligence, which
   [Socket Firewall](https://docs.socket.dev/docs/socket-firewall) (`sfw`) and
-  [`safedep/vet`](https://github.com/safedep/vet) do better than a hook can. wormhook stays
-  fully local; the `SessionStart` `firewall` light nudges you to install them and goes silent
-  once both are present.
+  [`safedep/vet`](https://github.com/safedep/vet) provide. wormhook stays local. Its
+  `SessionStart` check recommends those tools until both are present.
 
 ### Blast-radius exposure audit
 
-Detection has a false-negative rate, so the `SessionStart` `exposure` light answers the other
-question: how bad is it when we miss? It prints a punch list of long-lived secrets sitting in
-worm-targeted paths, and is silent when clean:
+The `SessionStart` exposure audit reports long-lived credentials that would increase the
+impact of a missed detection. It checks:
 
-- **Passphrase-less SSH private keys**, detected via `ssh-keygen -y -P ''`, which catches the
-  new OpenSSH key format that grepping for `ENCRYPTED` misses. It names the specific files.
-- **Plaintext GitHub tokens**: a `ghp_` PAT (non-expiring by default) or `gho_` OAuth token
+- **SSH private keys without passphrases**, detected with `ssh-keygen -y -P ''` rather than
+  an unreliable text search. The report names each file.
+- **Plaintext GitHub tokens:** a `ghp_` PAT or `gho_` OAuth token
   in `~/.git-credentials`, the `gh` config, or `GH_TOKEN`/`GITHUB_TOKEN`.
-- **A `.env` in the repo with a live-looking secret**, gated on a real credential shape (AWS
-  `AKIA...`, GitHub/OpenAI/Google keys, a PEM block) rather than any `KEY=` line.
+- **Repository `.env` files with credential-shaped values,** such as AWS
+  `AKIA...`, GitHub/OpenAI/Google keys, or a PEM block, rather than any `KEY=` line.
 
-It is advisory and never blocks, because posture is not an IOC. It stays capped at these
-three near-zero-FP checks so it can run every launch without becoming a nag; the rest of
-blast-radius management is environmental (sandboxed credential context, expiring tokens,
-hardware-held SSH keys, secrets-manager injection over `.env`) and lives outside this tool.
+The audit is advisory because weak credential posture is not an IOC. It stays limited to
+these low-noise checks. Use expiring tokens, hardware-held SSH keys, sandboxed credential
+contexts, and secret-manager injection for broader protection.
 
 ```mermaid
 flowchart TD
@@ -306,23 +288,22 @@ flowchart TD
 
 | Event | When | What |
 |-------|------|------|
-| `PreToolUse` | before an `npm`/`node`/... or `pip`/`uv`/`python` command | Tier 0-1 (plus Tier 2 if deps drifted); **blocks** on a hit (`permissionDecision: "deny"`) |
+| `PreToolUse` | before an `npm`/`node`/... command | Tier 0-1, plus Tier 2 when dependencies drift; **blocks** on a hit (`permissionDecision: "deny"`) |
+| `PreToolUse` | before a `pip`/`uv`/`python` command | Tier 0-1; **blocks** on a hit before Python can load a poisoned `.pth` |
 | `PostToolUse` | after an install-class or `pip`/`uv` install command | re-scan of the freshly written tree (Python installs re-run the Tier-0 `.pth` check); warns on a hit |
 | `PostToolUse` | after a working-tree-rewriting `git` op (`pull`/`merge`/`checkout`/`switch`/`rebase`) | Tier 0-1 on the new tree (plus Tier 2 on dep drift); warns on a hit. Catches IOCs that arrive over git with no npm involved |
 | `UserPromptSubmit` | every human turn | Tier 0-1 ([continuous monitor](#beyond-the-tiers)); **blocks** on a hit (`decision: "block"`). Silent when clean |
 | `SessionStart` | on launch | Tier 0-1 (plus Tier 2 on a stale cache); warns on a hit |
 
-Those five are the Claude-session triggers; the same tiers run outside Claude via
-[`wormhook-scan`](#run-it-outside-claude).
+These are the Claude-session triggers. [`wormhook-scan`](#run-it-outside-claude) exposes the
+same tiers outside Claude.
 
-`PreToolUse` and `UserPromptSubmit` are the hard blocks. They stop the command or turn
-regardless of whether the model cooperates. `SessionStart` and `PostToolUse` run after the
-point of no return and cannot abort, so they warn: a `systemMessage` to you plus
-`additionalContext` telling the model to refuse follow-up installs.
+`PreToolUse` and `UserPromptSubmit` enforce hard blocks. `SessionStart` and `PostToolUse`
+cannot undo completed work, so they warn the user and tell the model to refuse follow-up
+installs.
 
-Every scan ends with a one-line verdict, so silence is never ambiguous. 🟢 clean. 🟡 passed
-with degraded coverage, meaning a `timeout` was hit or signatures are missing, and the cache
-was not refreshed. 🚨 findings. Non-gated commands stay silent.
+Every triggered scan returns one verdict: 🟢 clean, 🟡 degraded coverage, or 🚨 findings.
+Degraded scans do not refresh the cache. Commands outside the gate stay silent.
 
 ## What it detects
 
@@ -345,7 +326,7 @@ was not refreshed. 🚨 findings. Non-gated commands stay silent.
   hardcoded HMAC key, and its `sh.azurestaticprovider.net` DNS-tunnel C2, plus `node-ipc.cjs`
   by name and hash, the filename is the real package's own entry point. The three affected
   version numbers are deliberately not encoded here; version-pinned blocking is
-  [Socket Firewall's and `vet`'s job](#what-it-deliberately-doesnt-do).
+  [Socket Firewall's and `vet`'s job](#scope-boundaries).
 - **Hades / Miasma PyPI wave** (Jun 2026). MCP typosquats (`openai-mcp`, `tiktoken-mcp`, ...)
   shipping a weaponized Python `.pth` startup hook (to Bun, to `_index.js`, the Hades
   stealer) and native import-time `.abi3.so` modules (`ensmallen_haswell`/`core2`) that
@@ -403,11 +384,10 @@ slipping malware into a repo you already work in. Where `pull_request_target` an
 fingerprints (the known-bad action slug, the carrier `require()`) so CI false positives stay
 at zero.
 
-## What it deliberately doesn't do
+## Scope boundaries
 
-Each row needs context a synchronous, no-network hook lacks, and forcing it in would trade
-away the near-zero false-positive rate that makes the block trustworthy. Run the owning layer
-alongside.
+These checks need network or runtime context that a synchronous local hook does not have.
+Use the owning layer alongside wormhook.
 
 | Check it doesn't do | Layer that owns it |
 |---------------------|--------------------|
@@ -422,43 +402,34 @@ alongside.
 | Credential-read to exfil (needs taint tracking) | GuardDog (`mode: taint`) |
 | Auditing PyPI package contents (wormhook gates `pip`/`uv`/`python` execution only, to run the Tier-0 `.pth` check early) | install-time sandbox / `vet` / GuardDog |
 
-The design bet is independence over coverage: a fast, no-network, near-zero-FP gate at the
-agent boundary that trips on a specific, evidence-backed set of indicators.
+wormhook favors an independent, fast, low-noise agent-boundary gate over broad but ambiguous
+coverage.
 
 ## Threat model: the scanner as a target
 
-The engine and its signatures live in the installed plugin dir under `$HOME`, writable by any
-process with `$HOME` write access, which is the same access the AGENT-HIJACK campaigns
-already use to write `~/.claude/setup.mjs`.
+The engine and signatures live under `$HOME`. Any process that can write
+`~/.claude/setup.mjs` may also be able to modify the scanner.
 
-- **Covered:** a worm that writes a payload next to the scanner. Tier 0 re-runs on every
-  event, uncached, exactly because `~/.claude` is attacker-writable.
-- **Residual gap:** a worm that edits the plugin itself. One appended `exit 0` in
-  `scripts/wormhook.sh`, or one emptied signature array, silences every surface at once, and
-  a neutered engine still prints its green status line. `.tripwire-allow` deliberately exempts
-  the engine and signature corpus from content scanning, because an IOC corpus looks like
-  malware, so an external scanner does not flag the edit either.
+- **Covered:** payloads written beside the scanner. Tier 0 checks attacker-writable agent
+  paths on every event without a cache.
+- **Residual gap:** direct plugin tampering. An attacker could disable the engine or empty
+  the signature set. `.tripwire-allow` excludes the engine and corpus from content scanning
+  because an IOC corpus necessarily resembles malware.
 
-The `SessionStart` `integrity` light closes the silent half of that gap. It verifies
-`scripts/wormhook.sh` and `scripts/malware-patterns.sh` against a shipped SHA-256 manifest
-(`scripts/integrity.sha256`) every launch and goes 🔴 on any mismatch. Like the jq "scans are
-OFF" alarm, it is deliberately not silenceable. It cannot stop an attacker who also rewrites
-the manifest, but it raises the bar from a one-line append to a coordinated edit, and a
-neutered engine no longer reports green. CI regenerates-or-fails on the manifest, so a
-legitimate engine change cannot ship a stale one. The plugin dir is also a git checkout:
-`git -C <plugin-dir> status` shows any local modification, and a marketplace update restores
-a clean copy.
+At every launch, the `integrity` check compares `scripts/wormhook.sh` and
+`scripts/malware-patterns.sh` with `scripts/integrity.sha256`. A mismatch is an unsilenceable
+🔴 alert. An attacker who can also replace the manifest can bypass it, but a one-line engine
+edit no longer looks healthy. CI rejects stale manifests. Because the plugin directory is a
+Git checkout, `git -C <plugin-dir> status` reveals local changes and a marketplace update
+restores the published copy.
 
 ## Signatures
 
-All signatures live in [`scripts/malware-patterns.sh`](./scripts/malware-patterns.sh),
-sourced by the hook so a new pattern reaches every tier at once. Patterns are extended regex
-and parse identically under bash and zsh.
+[`scripts/malware-patterns.sh`](./scripts/malware-patterns.sh) is the single signature
+source for every tier. Its extended regular expressions parse identically in Bash and Zsh.
 
-Signature detection is retrospective, so freshness is tracked. `WORMHOOK_SIGNATURES_ASOF`
-records when the corpus was last verified against current advisories, and the `SessionStart`
-`sigage` light goes 🟡 past `WORMHOOK_SIGAGE_MAX_DAYS` (default 60). A stale corpus would
-otherwise keep reporting green while detecting only last year's campaigns.
+`WORMHOOK_SIGNATURES_ASOF` records the last advisory review. The `SessionStart` `sigage`
+check turns 🟡 after `WORMHOOK_SIGAGE_MAX_DAYS`, which defaults to 60.
 
 ## Sources
 

@@ -11,7 +11,9 @@
 # site-packages hook, and the UserPromptSubmit monitor re-runs T0+T1 every human turn.
 #
 # Sources:
-#   - Shai-Hulud 1.0 (Sep 2025): global['!']=X-YYYY fingerprint, crypto drainer
+#   - Shai-Hulud 1.0 (Sep 2025): global['!']=X-YYYY fingerprint, crypto drainer, the
+#       shai-hulud-workflow.yml dropper (Checkmarx published the name only, so it is caught
+#       by basename) and the webhook.site exfil ID the bundle.js POSTs to
 #   - Shai-Hulud 2.0 (Nov 2025): self-replicating worm, GitHub exfil, 796 packages
 #   - Shai-Hulud 3.0 (Dec 2025): enhanced obfuscation, "Goldox-T3chs" marker, c0nt3nts.json
 #   - Mini Shai-Hulud (Apr-Jun 2026): npm+PyPI; TanStack/SAP-CAP/AntV/TeamPCP; git-tanstack.com
@@ -20,7 +22,14 @@
 #       ctf-scramble-v2 salt, firedalazer / OhNoWhatsGoingOnWithGitHub C2, __DAEMONIZED guard,
 #       russian-locale kill-switch, audit.checkmarx.cx C2
 #   - SANDWORM_MODE (Feb 2026): AI toolchain poisoning, MCP injection, SSH propagation
+#   - node-ipc (May 2026, StepSecurity): an 80KB obfuscated stealer appended as an IIFE to
+#       node-ipc.cjs, so it runs on require() with no lifecycle hook; DNS-tunnel exfil to
+#       sh.azurestaticprovider.net. Handles: the 0123456789GHJKMP base-16 alphabet, the
+#       hardcoded HMAC key, and node-ipc.cjs by hash (the filename itself is legitimate)
 #   - Axios/plain-crypto-js (Mar 2026): Sapphire Sleet (DPRK) RAT via sfrclak.com C2
+#   - TrapDoor (May 2026, Phoenix Security): npm+PyPI+crates.io; trap-core.js plants CLAUDE.md
+#       and .cursorrules carrying instructions hidden in U+200B/200C/200D/FEFF. The agent reads
+#       them, the human does not. Caught by a zero-width PRESENCE test, not a content pattern
 #   - Hades/Miasma PyPI wave (Jun 2026): MCP typosquats (openai-mcp, langchain-core-mcp,
 #       tiktoken-mcp, instructor-mcp) ship a *.pth hook that downloads Bun + runs _index.js;
 #       import-time .abi3.so modules (ensmallen_haswell/core2); /tmp/.sshu-setup.js SSH
@@ -30,7 +39,10 @@
 #       M-RED-TEAM v6.4 / _miasma._tcp markers, IPFS-staged second stage (2 CIDs)
 #   - ChainDrop / keyv-cacheable (Aug 2026): keyv@6.0.0 preinstall -> setup.mjs loader +
 #       math_init.js payload (hash IOCs); C2 resolved from ETH contract 0xE1f2…3103 (the
-#       address is the on-disk constant; domains stay in the network layer)
+#       address is the on-disk constant; domains stay in the network layer). The four domains
+#       that contract has served (npm-cache.com, awqhnjewqjkl.icu, pypi-get.com, js-mirror.com)
+#       are a Tier-2 backstop only. Its Dune-themed strings are Base91-encoded at rest and
+#       never greppable — see the KEY-DECISION in malware-patterns.sh.
 #   - "A9-0522" build (Aug 2026, FIELD-OBSERVED — no vendor advisory): ChainDrop-lineage
 #       on-chain C2, appended to a repo's own tailwind.config.js behind ~500 spaces of padding.
 #       global.i="A9-0522-4" tag (dot form, which the Shai-Hulud 1.0 bracket regex missed);
@@ -481,6 +493,42 @@ BODY
 )"
 done
 
+# Hidden-Unicode sweep. Its own list, because cfg_list is jq-parsed JSON and the two files the
+# TrapDoor guidance names first are markdown — jq structurally cannot read them.
+
+# KEY-DECISION 2026-08-22: prose configs get the zero-width test ONLY, never dropper tokens.
+# A CLAUDE.md documenting `curl … | sh` is a README; a settings.json running one is wiring.
+zw_list=( "${cfg_list[@]}" "${HOME}/.claude/CLAUDE.md" "${HOME}/AGENTS.md" "${HOME}/.cursorrules" )
+for _t in "${TARGET_DIRS[@]}"; do
+  zw_list+=( "$_t/CLAUDE.md" "$_t/.claude/CLAUDE.md" "$_t/AGENTS.md" "$_t/.cursorrules" )
+done
+zw_files=()
+for zwf in "${zw_list[@]}"; do [[ -f "$zwf" ]] && zw_files+=( "$zwf" ); done
+# One grep over the whole list, then a second only on a hit — Tier 0 runs on every human turn.
+if [[ ${#zw_files[@]} -gt 0 ]]; then
+  zw_file=$(LC_ALL=C grep -laE "$MALWARE_ZEROWIDTH_RE" "${zw_files[@]}" 2>/dev/null | head -1)
+  if [[ -n "$zw_file" ]]; then
+    zw_line=$(LC_ALL=C grep -naE "$MALWARE_ZEROWIDTH_RE" "$zw_file" 2>/dev/null | head -1 | cut -d: -f1)
+    alert "HIDDEN UNICODE IN AGENT CONFIG" "$(cat <<BODY
+$zw_file carries a zero-width Unicode character at line ${zw_line:-?}.
+${COMMAND:+Command blocked: $COMMAND}
+Nothing legitimate writes one into an agent config. TrapDoor (May 2026) planted
+CLAUDE.md and .cursorrules holding instructions built from U+200B/200C/200D/2060/FEFF:
+your agent tokenizes every one of them, and your editor shows you none of them.
+An emoji ZWJ sequence, a leading byte-order mark, and Persian/Urdu/Hindi U+200C
+orthography are all exempted, so this is not one of those.
+
+Immediate steps:
+  1. Reveal them: LC_ALL=C grep -naE \$'\\xe2\\x80\\x8b|\\xe2\\x80\\x8c|\\xe2\\x80\\x8d|\\xe2\\x81\\xa0|\\xef\\xbb\\xbf' "$zw_file"
+  2. git log -p -- "$zw_file"  (find the commit that added the line)
+  3. Delete the hidden text, or the whole file if you did not author it
+  4. Assume the agent already followed it: rotate npm/GitHub tokens, SSH keys,
+     cloud + LLM API keys, and check ~/.ssh/authorized_keys and crontab -l
+BODY
+)"
+  fi
+fi
+
 # Ask git for the hooks dir: in a WORKTREE .git is a FILE, so the literal path scanned
 # nothing (#60). The literal fallback covers a missing git or a non-repo $CWD.
 repo_hooks=$(git -C "$CWD" rev-parse --git-path hooks 2>/dev/null) || repo_hooks=""
@@ -688,18 +736,24 @@ BODY
   for _t in "${TARGET_DIRS[@]}"; do
     [[ -d "$_t/.github/workflows" ]] || continue
     wf_hit=$(grep -rilE "$MALWARE_WORKFLOW_RE" "$_t/.github/workflows" 2>/dev/null | head -1)
+    # A dropper whose body was never published is reachable only by name (#84).
+    [[ -n "$wf_hit" ]] || wf_hit=$(find "$_t/.github/workflows" -type f 2>/dev/null \
+      | grep -iE "$MALWARE_WORKFLOW_NAME_RE" | head -1)
     if [[ -n "$wf_hit" ]]; then
       alert "MALICIOUS GITHUB ACTIONS WORKFLOW" "$(cat <<BODY
-$wf_hit references a known supply-chain campaign action / marker.
+$wf_hit is a known campaign dropper by name, or references a campaign marker.
 ${COMMAND:+Command blocked: $COMMAND}
 SANDWORM_MODE injects a workflow (often pull_request_target, so it runs with repo
 secrets on untrusted PR code) that calls ci-quality/code-quality-check to exfiltrate
-secrets.
+secrets. Shai-Hulud 1.0 writes shai-hulud-workflow.yml into every repo a stolen
+token can reach and POSTs the secrets to webhook.site.
 
 Immediate steps:
   1. git log -p -- "$wf_hit"
   2. Remove the workflow and any pull_request_target job that builds untrusted PR code
   3. Rotate ALL repository + org secrets (Actions secrets, OIDC trusts, deploy keys)
+  4. Rotating alone is not enough: while the workflow is committed, the next CI run
+     leaks the new secrets too. Remove it first.
 BODY
 )"
     fi
@@ -756,7 +810,7 @@ PAYLOAD_FILES=(
   "c0nt3nts.json" "c9nt3nts.json" "3nvir0nm3nt.json" "cl0vd.json"
   "actionsSecrets.json" "truffleSecrets.json" "gh-token-monitor.sh"
 )
-HASH_IOC_FILES=( "router_init.js" "router_runtime.js" "tanstack_runner.js" "opensearch_init.js" "setup_bun.js" "bun_environment.js" "math_init.js" "Math_Symbol.js" "setup.mjs" )
+HASH_IOC_FILES=( "router_init.js" "router_runtime.js" "tanstack_runner.js" "opensearch_init.js" "setup_bun.js" "bun_environment.js" "math_init.js" "Math_Symbol.js" "setup.mjs" "node-ipc.cjs" )
 HASH_IOC_HASHES=(
   "ab4fcadaec49c03278063dd269ea5eef82d24f2124a8e15d7b90f2fa8601266c"
   "2ec78d556d696e208927cc503d48e4b5eb56b31abc2870c2ed2e98d6be27fc96"
@@ -770,6 +824,8 @@ HASH_IOC_HASHES=(
   "9fc2570b7cef51c1b8df116d144d11ff4096357be7d2c4c6367cfc2509cf1bcc"
   "fd3ca4007b225fdf8de7af4345a19179d5efa8c4bb9205f88cda806e5684b1eb"
   "54dc7ea54a1317cca0e890a2770630cf7fa6c97813e0cb9d2caa93012b350668"
+  # node-ipc (May 2026): node-ipc.cjs is the real package's CJS entry, so name+hash, not name.
+  "96097e0612d9575cb133021017fb1a5c68a03b60f9f3d24ebdc0e628d9034144"
 )
 
 if [[ "$RUN_T2" == 1 && -d "$NODE_MODULES" ]]; then

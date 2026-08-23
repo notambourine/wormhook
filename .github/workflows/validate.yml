@@ -198,16 +198,19 @@ jobs:
 
       # Versioning is manual; this tripwire turns "forgot to bump" into a red X
       # instead of silent drift. Behavior lives in scripts/ + hooks/ -- docs- and
-      # CI-only PRs need no bump. Diffs against the PR's recorded base SHA (exact
-      # "what this PR changes", immune to base-branch drift); the sort -V check
-      # additionally requires the version to move FORWARD, not merely differ.
+      # CI-only PRs need no bump. *.md under those dirs (scripts/doctor/CLAUDE.md,
+      # a maintainer-context file, not shipped behavior) is excluded, else a pure
+      # prose edit there would falsely demand a bump. Diffs against the PR's
+      # recorded base SHA (exact "what this PR changes", immune to base-branch
+      # drift); the sort -V check additionally requires the version to move
+      # FORWARD, not merely differ.
       - name: Require version bump when behavior changes (PRs only)
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           git fetch --no-tags --depth=1 origin "$BASE_SHA"
-          if git diff --quiet "$BASE_SHA" HEAD -- scripts/ hooks/; then
+          if git diff --quiet "$BASE_SHA" HEAD -- scripts/ hooks/ ':(exclude,glob)scripts/**/*.md' ':(exclude,glob)hooks/**/*.md'; then
             echo "no behavior change (scripts/, hooks/) -- version bump not required"
             exit 0
           fi

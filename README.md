@@ -359,7 +359,10 @@ refreshes the cache), 🚨 findings. Non-gated commands stay silent.
 ## What it detects
 
 - **Shai-Hulud 1.0–3.0 + the Mini variant** — obfuscation markers, runner fingerprints,
-  ransom tokens, `git-tanstack` typosquat exfil, payload filenames, SHA256 IOCs.
+  ransom tokens, `git-tanstack` typosquat exfil, payload filenames, SHA256 IOCs. The v1
+  `shai-hulud-workflow.yml` dropper is matched by **basename**, since Checkmarx published its
+  name but never its body — a content grep alone cannot see it. Its `webhook.site` exfil ID
+  lands as a content fingerprint; the bare domain would not, it FPs on real test fixtures.
 - **SAP-CAP / AntV / TeamPCP wave** (Apr–Jun 2026) — the unique payload-internal strings
   (`ctf-scramble-v2` PBKDF2 salt, the `firedalazer` / `OhNoWhatsGoingOnWithGitHub` GitHub-
   commit-search C2 keywords, the `__DAEMONIZED` guard, the russian-locale kill-switch),
@@ -369,6 +372,13 @@ refreshes the cache), 🚨 findings. Non-gated commands stay silent.
   persistence, `sfrclak` C2 beacons.
 - **SANDWORM_MODE** — AI-toolchain poisoning: the marker, `*.workers.dev/{exfil,drain}`
   C2, `freefan`/`fanfree` DNS-tunnel domains, the drain bearer token.
+- **node-ipc credential stealer** (May 2026) — three releases carried the same 80 KB
+  obfuscated IIFE appended to `node-ipc.cjs`, firing on every `require()` with no lifecycle
+  hook to gate. Caught by the payload's custom base-16 alphabet (`0123456789GHJKMP`), its
+  hardcoded HMAC key, and its `sh.azurestaticprovider.net` DNS-tunnel C2, plus `node-ipc.cjs`
+  by name **and** hash — the filename is the real package's own entry point. The three
+  affected version numbers are deliberately not encoded here; version-pinned blocking is
+  [Socket Firewall's and `vet`'s job](#what-it-deliberately-doesnt-do).
 - **Hades / Miasma PyPI wave** (Jun 2026) — MCP typosquats (`openai-mcp`, `tiktoken-mcp`,
   …) shipping a weaponized Python `.pth` startup hook (→ Bun → `_index.js` Hades stealer)
   and native import-time `.abi3.so` modules (`ensmallen_haswell`/`core2`) that execute on
@@ -378,8 +388,12 @@ refreshes the cache), 🚨 findings. Non-gated commands stay silent.
 - **ChainDrop / keyv-cacheable wave** (Aug 2026) — the `setup.mjs` loader and
   `math_init.js` payload by SHA256 hash IOC, plus the Ethereum C2-resolution contract
   address embedded in the payload (`0xE1f2…3103`; the C2 *domains* resolve at runtime, so
-  they belong to a network blocklist, not a content grep). The wave's GitHub commit-search
-  fallback markers (`thebeautiful{march,snads}oftime`) were already covered.
+  the contract, not a domain, is the durable handle). The four domains that contract has
+  served — `npm-cache.com`, `awqhnjewqjkl.icu`, `pypi-get.com`, `js-mirror.com` — land as a
+  Tier-2 backstop for a build that hardcodes one. The wave's GitHub commit-search fallback
+  markers (`thebeautiful{march,snads}oftime`) were already covered. Its Dune-themed payload
+  strings are **not** covered and never will be: Unit 42 recovered them by decoding a Base91
+  table with 73 per-call alphabets, so no plaintext word reaches disk for a grep to find.
 - **"A9-0522" build** (Aug 2026, field-observed) — a ChainDrop-lineage payload appended to a
   repo's *own* `tailwind.config.js` behind ~500 spaces of padding, resolving its C2 from
   wallet `0xa322e5f3…` over public Ethereum RPC. Blocks on the dot-form campaign tag
@@ -399,6 +413,17 @@ refreshes the cache), 🚨 findings. Non-gated commands stay silent.
   task that re-runs `setup.mjs` on every project open), poisoned git hooks
   (`init.templateDir`/`core.hooksPath`), `pull_request_target` workflows calling the
   `ci-quality/code-quality-check` action, `@semantic-release/exec` carrier injection.
+- **Prompt injection hidden in agent configs** (TrapDoor, May 2026) — `trap-core.js` plants a
+  `CLAUDE.md` or `.cursorrules` whose instructions are built from zero-width Unicode. Your
+  agent tokenizes every codepoint; your editor renders none of them, so a poisoned config
+  needs to execute nothing — it only has to be read. wormhook scans `CLAUDE.md`,
+  `.claude/CLAUDE.md`, `AGENTS.md`, and `.cursorrules` for U+200B/200C/200D/2060/FEFF on a
+  path that does not assume JSON, since the `jq` config scan structurally cannot read
+  markdown. Only U+200B matches on its own; every other codepoint needs a printable ASCII
+  neighbour, which exempts emoji ZWJ, a leading byte-order mark, and the U+200C that
+  Persian/Urdu/Hindi prose spells words with — that is what keeps this block-safe. Prose configs
+  are checked for hidden codepoints **only**, never dropper tokens: a `CLAUDE.md` documenting
+  `curl … | sh` is a README, while a `settings.json` running one is wiring.
 - **Remote-eval loaders** — `atob(process.env.…)` + `eval`/`Function(await …)` behavioral
   fingerprints, plus field-observed C2/exfil hosts.
 - **Campaign-agnostic behaviors** (`node_modules` tier only) — decode-then-`eval`
@@ -485,8 +510,11 @@ mirrored in the header of [`scripts/wormhook.sh`](./scripts/wormhook.sh)):
 - **Wiz** — [Mini Shai-Hulud: TanStack & more](https://www.wiz.io/blog/mini-shai-hulud-strikes-again-tanstack-more-npm-packages-compromised)
 - **Semgrep** — [Axios supply-chain incident](https://semgrep.dev/blog/2026/axios-supply-chain-incident-indicators-of-compromise-and-how-to-contain-the-threat/)
 - **Socket** — [SANDWORM_MODE](https://socket.dev/blog/sandworm-mode-npm-worm-ai-toolchain-poisoning) · [Miasma & Hades (PyPI/MCP)](https://socket.dev/blog/mini-shai-hulud-miasma-and-hades-worms-target-bioinformatics-and-mcp-developers-via-malicious)
+- **Phoenix Security** — [TrapDoor: cross-ecosystem credential theft and AI-assistant poisoning](https://phoenix.security/trapdoor-supply-chain-ai-poisoning-npm-pypi-crates/) (zero-width Unicode in `CLAUDE.md` / `.cursorrules`)
+- **Checkmarx** — [npm hit by Shai-Hulud](https://checkmarx.com/zero-post/npm-hit-by-shai-hulud-the-self-replicating-supply-chain-attack/) (`shai-hulud-workflow.yml`, the `webhook.site` exfil ID)
+- **StepSecurity** — [Malicious node-ipc versions published to npm](https://www.stepsecurity.io/blog/node-ipc-npm-supply-chain-attack) (base-16 alphabet, HMAC key, `node-ipc.cjs` hash, `sh.azurestaticprovider.net`)
 - **Snyk** — [Mini Shai-Hulud hits AntV](https://snyk.io/blog/mini-shai-hulud-antv-npm-supply-chain-attack/) (`kitty-monitor`, `firedalazer`, `.vscode/tasks.json` `folderOpen`)
-- **Unit 42** — [Monitoring npm supply-chain attacks](https://unit42.paloaltonetworks.com/monitoring-npm-supply-chain-attacks/) (`audit.checkmarx.cx`, `OhNoWhatsGoingOnWithGitHub` C2)
+- **Unit 42** — [Monitoring npm supply-chain attacks](https://unit42.paloaltonetworks.com/monitoring-npm-supply-chain-attacks/) (`audit.checkmarx.cx`, `OhNoWhatsGoingOnWithGitHub` C2) · [Inside a self-propagating npm worm](https://unit42.paloaltonetworks.com/chaindrop-npm-worm-analysis/) (ChainDrop C2 domains, Base91 layering)
 - **Mend** — [Shai-Hulud SAP CAP via Claude Code](https://www.mend.io/blog/shai-hulud-sap-cap-supply-chain-attack-claude-code/) (`ctf-scramble-v2`, `__DAEMONIZED`, russian-locale kill-switch)
 - **Microsoft** — [AsyncAPI compromise & Miasma import-time payload](https://www.microsoft.com/en-us/security/blog/2026/07/15/unpacking-asyncapi-npm-supply-chain-compromise-import-time-payload-delivery/) (`miasma-train-p1`, `NodeJS/sync.js`, `.miasma`, IPFS CIDs) · [ChainDrop anatomy](https://www.microsoft.com/en-us/security/blog/2026/08/04/chaindrop-supply-chain-compromise-anatomy-self-propagating-worm/)
 - **Elastic** — [ChainDrop / keyv Shai-Hulud wave](https://www.elastic.co/security-labs/shai-hulud-chaindrop-npm-supply-chain) (payload hashes, ETH contract)

@@ -331,3 +331,4 @@ jobs:
         README.md
         scripts/wormhook.sh
         scripts/malware-patterns.sh
+        tests/run.sh

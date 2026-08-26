@@ -6,3 +6,6 @@
 README.md
 scripts/wormhook.sh
 scripts/malware-patterns.sh
+# The suite writes synthetic payload fixtures inline, so its own source carries
+# campaign markers verbatim.
+tests/run.sh

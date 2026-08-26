@@ -323,7 +323,7 @@ jobs:
   # .tripwire-allow so CI and the local SessionStart tripwire hook agree on what is a
   # documented-IOC false positive (filename/hash/lifecycle hits are never exempted).
   tripwire:
-    uses: notambourine/shai-hulud-tripwire/.github/workflows/tripwire.yml@d58d0e6e2185e1388a4e1fc96f246115b9fd216b # v1.1.3
+    uses: notambourine/shai-hulud-tripwire/.github/workflows/tripwire.yml@1047f6fd7c10fed2b574dc783039e4cf9e4065e1 # v1.2.0
     permissions:
       contents: read
     with:
@@ -331,3 +331,4 @@ jobs:
         README.md
         scripts/wormhook.sh
         scripts/malware-patterns.sh
+        tests/run.sh

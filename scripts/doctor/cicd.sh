@@ -3,7 +3,8 @@
 # published wormhook action? Only committed workflow TEXT is observable, so a hit proves the
 # action is REFERENCED, never that it is enforced as a required check (GitHub API state, and
 # wormhook makes no network calls). Relevance-gated to a repo that runs Actions AND ships an
-# npm/PyPI manifest, so it cannot cry wolf on a repo with nothing to gate.
+# npm/PyPI manifest, so it cannot cry wolf on a repo with nothing to gate. A repo whose scan
+# arrives through a reusable-workflow call is undecidable from that text, and stays silent.
 #   🟡 gate applicable but absent (silenceable).  ⚪ silenced.  Everything else silent.
 set -uo pipefail
 
@@ -19,11 +20,15 @@ wf_files=$(find "$wf_dir" -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml'
 [[ -d "$wf_dir" && -n "$wf_files" ]] || exit 0
 
 # Match a `uses:` context, not a bare mention, so a doc reference cannot read as a wired gate.
+wh_re='uses:[[:space:]]*\.?/?notambourine/wormhook'
+# A cross-repo reusable WORKFLOW hides its jobs from this text, so coverage is undecidable and
+# silence beats a wrong 🟡; wider (any third-party `uses:`) would silence nearly every repo.
+reusable_re='uses:[[:space:]]*[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/\.github/workflows/[^[:space:]]+\.ya?ml@'
 # Loop, not xargs — filenames may have spaces.
 hit=""
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue
-  if grep -qE 'uses:[[:space:]]*\.?/?notambourine/wormhook' "$f" 2>/dev/null; then hit="$f"; break; fi
+  if grep -qE "$wh_re|$reusable_re" "$f" 2>/dev/null; then hit="$f"; break; fi
 done <<< "$wf_files"
 [[ -n "$hit" ]] && exit 0
 

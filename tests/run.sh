@@ -602,6 +602,34 @@ OUT="$(bash "$REPO_ROOT/scripts/doctor/drift.sh" 2>/dev/null)"
 if [[ -z "$OUT" ]]; then _ok "drift: dev checkout stays silent"
 else _bad "drift: dev checkout stays silent" "emitted: $OUT"; fi
 
+# 11. CI-GATE DOCTOR LIGHT: the nudge is only as good as what a text grep can see, so the
+#     three cases are: gate absent, gate direct, gate behind an opaque reusable workflow.
+
+# _mkcicd <workflow body>: a git repo with an npm manifest, i.e. both relevance gates open.
+_mkcicd() {
+  _mktemp_case
+  mkdir -p "$CASE_CWD/.github/workflows"
+  git -C "$CASE_CWD" init -q 2>/dev/null
+  printf '{"name":"t"}\n' > "$CASE_CWD/package.json"
+  printf '%s\n' "$1" > "$CASE_CWD/.github/workflows/ci.yml"
+}
+_cicd() { (cd "$CASE_CWD" && bash "$REPO_ROOT/scripts/doctor/cicd.sh" 2>/dev/null); }
+
+_mkcicd 'jobs: { build: { steps: [ { uses: actions/checkout@v4 } ] } }'
+assert_jq "cicd: Actions + manifest with no gate flags 🟡" "$(_cicd)" \
+  '.systemMessage|contains("🟡") and contains("no wormhook CI gate")'
+
+_mkcicd 'jobs: { scan: { steps: [ { uses: notambourine/wormhook@v1 } ] } }'
+OUT="$(_cicd)"
+if [[ -z "$OUT" ]]; then _ok "cicd: direct uses: of the action is silent"
+else _bad "cicd: direct uses: of the action is silent" "emitted: $OUT"; fi
+
+# The horizon shape: the scan runs in the callee, which this text cannot see.
+_mkcicd 'jobs: { fleet: { uses: notambourine/fleet-actions/.github/workflows/fleet-ci.yml@abc123 } }'
+OUT="$(_cicd)"
+if [[ -z "$OUT" ]]; then _ok "cicd: reusable-workflow call is undecidable, not a finding"
+else _bad "cicd: reusable-workflow call is undecidable, not a finding" "emitted: $OUT"; fi
+
 echo
 printf 'tests: %d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

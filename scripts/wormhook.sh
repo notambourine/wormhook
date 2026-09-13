@@ -515,8 +515,8 @@ for _u in "$HOME"/.local/lib/python*/site-packages \
 done
 pth_files=()
 if [[ ${#py_roots[@]} -gt 0 ]]; then
-  py_paths=$(timeout 5 find "${py_roots[@]}" -maxdepth 5 -name '*.pth' -type f 2>/dev/null)
-  [[ $? -eq 0 ]] || warn "Python .pth scan failed or timed out (coverage incomplete)"
+  py_paths=$(timeout 5 find "${py_roots[@]}" -maxdepth 5 -name '*.pth' -type f 2>/dev/null) ||
+    warn "Python .pth scan failed or timed out (coverage incomplete)"
   while IFS= read -r _p; do [[ -n "$_p" ]] && pth_files+=("$_p"); done <<<"$py_paths"
 fi
 for _t in "${TARGET_DIRS[@]}"; do
@@ -559,8 +559,8 @@ fi
 
 so_files=()
 if [[ ${#py_roots[@]} -gt 0 ]]; then
-  py_paths=$(timeout 5 find "${py_roots[@]}" -maxdepth 5 -name '*.abi3.so' -type f 2>/dev/null)
-  [[ $? -eq 0 ]] || warn "Python native-module scan failed or timed out (coverage incomplete)"
+  py_paths=$(timeout 5 find "${py_roots[@]}" -maxdepth 5 -name '*.abi3.so' -type f 2>/dev/null) ||
+    warn "Python native-module scan failed or timed out (coverage incomplete)"
   while IFS= read -r _s; do [[ -n "$_s" ]] && so_files+=("$_s"); done <<<"$py_paths"
 fi
 for _t in "${TARGET_DIRS[@]}"; do

@@ -683,7 +683,7 @@ for arg in "$CASE_DIR/missing" --unsupported; do
   else _bad "CLI check: rejects $arg" "rc=$RC"; fi
 done
 OUT="$(HOME="$CASE_HOME" bash "$SCAN_CLI" --help 2>/dev/null)"
-if [[ "$OUT" == *'eval "$(wormhook-scan shell-init)"'* ]]; then _ok "CLI help: prints shell-init command literally"
+if [[ "$OUT" == *"eval \"\$(wormhook-scan shell-init)\""* ]]; then _ok "CLI help: prints shell-init command literally"
 else _bad "CLI help: prints shell-init command literally"; fi
 
 echo

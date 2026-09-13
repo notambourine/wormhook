@@ -5,8 +5,6 @@ on:
     branches: [main]
   pull_request:
 
-# Least-privilege GITHUB_TOKEN: this workflow only reads the checkout. Without
-# this, the token defaults to write scopes a compromised step could abuse.
 permissions:
   contents: read
 
@@ -15,29 +13,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      # Egress monitoring of the runner itself (StepSecurity). Must be the first
-      # step. audit = observe-only, never blocks; the per-run insights link in the
-      # log shows observed endpoints. Graduate to egress-policy: block + an
-      # allowed-endpoints allowlist once a few audit runs have mapped the egress.
-      # Community tier is public-repos-only — applies here (wormhook is public).
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Read-only CI (lint/scan, no git push, no .git/ artifact upload), so
-          # don't persist the token into .git/config (zizmor artipacked).
           persist-credentials: false
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
 
-      # Socket Firewall Free (keyless) installs the `sfw` proxy into the job;
-      # the install step below runs through it so a package flagged malicious
-      # AFTER this lockfile-less `npm install -g` resolves still gets blocked at
-      # fetch time — the time-of-check->time-of-use gap a PR-time scan can't close.
       - uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
         with:
           mode: firewall-free
@@ -45,11 +32,7 @@ jobs:
       - name: Install Claude Code CLI
         run: sfw npm install -g @anthropic-ai/claude-code
 
-      # Schema-validates plugin.json plus the skill/agent/hook frontmatter. --strict
-      # promotes unrecognized-field warnings to errors, and there is exactly ONE warning
-      # we accept: the root CLAUDE.md is maintainer context for this repo, not context
-      # shipped to a plugin consumer, and it stays at the root regardless. Allowlisting
-      # that one line (rather than dropping --strict) keeps every other warning red.
+      # Allow only the maintainer CLAUDE.md warning; all other schema findings fail.
       - name: Validate plugin schema
         run: |
           # GitHub runs `run:` under `bash -e`, so a bare assignment from a failing
@@ -65,7 +48,6 @@ jobs:
             exit "$rc"
           fi
 
-      # The hook is the whole product here -- lint it so a broken edit can't ship.
       - name: ShellCheck the scanner
         run: |
           sudo apt-get update && sudo apt-get install -y shellcheck
@@ -75,24 +57,9 @@ jobs:
           # non-recursive scripts/*.sh glob -- list the subdir explicitly.
           shellcheck scripts/*.sh scripts/doctor/*.sh tests/*.sh
 
-      # Fixtures seam over the engine: {synthetic payload + planted files in a temp
-      # CWD} -> assert on the emitted verdict JSON. Proves the engine DETECTS the
-      # campaigns it claims (per-tier positives), holds its FP exclusions (the
-      # adc-e.uk partition-table collision fixed in v0.15.2), keeps the two block-
-      # event emission shapes distinct (PreToolUse deny vs UserPromptSubmit block),
-      # and that the installed git-hook body never self-flags (the CLAUDE.md
-      # "Verified by test" claim). Zero network; each case is hermetic ($HOME +
-      # XDG_CACHE_HOME redirected into a temp dir). A wrong verdict exits non-zero
-      # and fails the build.
       - name: Run engine fixtures harness
         run: bash tests/run.sh
 
-      # Presence-assert for the split doctor checks. The jq-missing "scans are OFF" 🔴
-      # alarm is owned solely by doctor/deps.sh (every other check stays silent when jq
-      # is absent), so a missing/non-exec deps.sh would silently disarm the one alarm the
-      # doctor exists to raise. This turns that corruption case into a red PR instead of a
-      # user's silent SessionStart. _utils.sh is sourced (not executed), so it is checked
-      # for existence only, not the +x bit.
       - name: Assert doctor checks present + executable
         run: |
           test -f scripts/doctor/_utils.sh || { echo "::error::scripts/doctor/_utils.sh missing"; exit 1; }
@@ -109,12 +76,6 @@ jobs:
           done
           echo "registered doctor checks present + executable; deps.sh first"
 
-      # The integrity light (doctor/integrity.sh, issue #61) verifies the engine +
-      # signature corpus against scripts/integrity.sha256 at every SessionStart. This
-      # keeps the manifest honest: an engine edit that forgets to regenerate it would
-      # otherwise ship a permanent false-🔴 to every install. Combined with the
-      # version-bump tripwire below, an engine change needs BOTH a fresh manifest and
-      # a version move to go green.
       - name: Verify integrity manifest matches the engine
         run: |
           (cd scripts && shasum -a 256 -c integrity.sha256) || {
@@ -122,15 +83,7 @@ jobs:
             exit 1
           }
 
-      # Makes the "Two sources of truth" invariant executable (CLAUDE.md): which commands
-      # trigger a scan is encoded twice — the *_RE regexes in wormhook.sh (the precise gate)
-      # and the `if` globs in hooks.json (the coarse perf pre-filter). The contract is `if` ⊇
-      # regex: `if` BROADER is a free wasted spawn, but `if` NARROWER means the hook silently
-      # never fires and the scan is skipped with no signal. This derives the gated verbs FROM
-      # the regexes (npm/pnpm/yarn/bun/npx/node, the pip*/uv/python* set, and git ops as
-      # `git <sub>`) and asserts each has a covering Bash(<verb> *) glob in the right event.
-      # UserPromptSubmit is exempt — its payload carries no command, so its hook entry has no
-      # `if` (it gates purely on EVENT). Reads only repo files (no workflow inputs); no edits.
+      # A narrower hook filter silently suppresses valid engine matches.
       - name: Assert if-globs cover the gated regexes (if ⊇ regex)
         run: |
           HOOK=scripts/wormhook.sh
@@ -196,14 +149,6 @@ jobs:
           fi
           exit "$fail"
 
-      # Versioning is manual; this tripwire turns "forgot to bump" into a red X
-      # instead of silent drift. Behavior lives in scripts/ + hooks/ -- docs- and
-      # CI-only PRs need no bump. *.md under those dirs (scripts/doctor/CLAUDE.md,
-      # a maintainer-context file, not shipped behavior) is excluded, else a pure
-      # prose edit there would falsely demand a bump. Diffs against the PR's
-      # recorded base SHA (exact "what this PR changes", immune to base-branch
-      # drift); the sort -V check additionally requires the version to move
-      # FORWARD, not merely differ.
       - name: Require version bump when behavior changes (PRs only)
         if: github.event_name == 'pull_request'
         env:
@@ -226,13 +171,6 @@ jobs:
           fi
           echo "version bump OK: $old -> $new"
 
-  # ── Dogfood: run wormhook's OWN action.yml against wormhook's own tree ──
-  # action.yml ("run the engine in CI") ships in this repo but had no coverage on
-  # its own source. This exercises it on every push/PR and self-asserts the tree is
-  # clean by the exact engine the plugin ships -- eat our own dog food. harden-runner
-  # in audit mode doubles as evidence for the "no network calls -- ever" invariant:
-  # the run's egress-insights link shows the scan step makes zero outbound calls.
-  # Source-only tree (no node_modules to deep-walk) -> mode: fast.
   wormhook-self:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -244,18 +182,12 @@ jobs:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Read-only CI (lint/scan, no git push, no .git/ artifact upload), so
-          # don't persist the token into .git/config (zizmor artipacked).
           persist-credentials: false
       - name: Scan this repo with wormhook's own action
         uses: ./
         with:
           mode: fast
 
-  # ── Secret scanning: the gate a stranger or a --no-verify push still hits ──
-  # Local git hooks scan staged changes and the pushed range, but they are defeated
-  # by --no-verify, by a clone without the binary, and by any other contributor.
-  # This job is also the only gate that reads full history instead of a diff.
   secrets:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -267,26 +199,15 @@ jobs:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Load-bearing: `betterleaks git` walks commits, and the default shallow
-          # checkout hands it one. A key committed last month would scan clean.
           fetch-depth: 0
           persist-credentials: false
 
-      # Stays PINNED while betterleaks below does not: cosign is a build tool, so a
-      # frozen version scans nothing; betterleaks is a signature scanner, whose value
-      # IS the ruleset that shipped this week.
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Scan full history for secrets
-        # betterleaks is resolved fresh EVERY RUN, deliberately unpinned: a version pin
-        # scans with whatever ruleset shipped the day this file was written, and no
-        # dependabot ecosystem covers a release tarball, so the pin would freeze by
-        # hand. Safe only because the release is VERIFIED, not trusted: cosign binds
-        # checksums.txt to betterleaks' own release.yml at the resolved tag, then
-        # sha256sum binds the tarball to that verified checksums.txt. Drop the cosign
-        # step and this becomes "run whatever the release page serves today".
+        # Resolve fresh secret rules each run; verify the release signature before using the binary.
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # gh release view/download
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Unpack OUTSIDE the workspace: a 20 MB Go binary of compressed entropy is
           # exactly what a secret scanner is built to flag.
@@ -312,16 +233,7 @@ jobs:
           # rule that names an issuer is affected.
           ./betterleaks git "$GITHUB_WORKSPACE" --no-banner --redact=100 --confidence medium
 
-  # ── Complementary layer: shai-hulud-tripwire (committed-persistence artifacts) ──
-  # wormhook's block tier DELIBERATELY does not flag generic secrets-context workflow
-  # exfil or pull_request_target abuse -- too FP-prone (malware-patterns.sh
-  # MALWARE_WORKFLOW_RE matches only named campaign slugs). This reusable workflow
-  # specializes in exactly that tree-committed persistence pattern, so it is additive,
-  # not redundant. Offline + zero-secret (contents: read). Non-gating here: validate
-  # holds no secrets to gate via needs:, so the value is as a required status check
-  # behind a branch ruleset, not as a job barrier. allow-globs MIRRORS the in-tree
-  # .tripwire-allow so CI and the local SessionStart tripwire hook agree on what is a
-  # documented-IOC false positive (filename/hash/lifecycle hits are never exempted).
+  # Tripwire covers generic workflow exfiltration beyond the campaign signatures here.
   tripwire:
     uses: notambourine/shai-hulud-tripwire/.github/workflows/tripwire.yml@1047f6fd7c10fed2b574dc783039e4cf9e4065e1 # v1.2.0
     permissions:

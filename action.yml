@@ -1,15 +1,3 @@
-# wormhook as a reusable GitHub Action — the CI/PR-gate trigger for the same engine
-# that powers the Claude Code hook, the launchd sweep, and the global git hook.
-#
-# github.com has no custom pre-receive hook, so a push cannot be vetoed as its bytes
-# arrive. The reachable equivalent is: a ruleset that BLOCKS force pushes + requires a
-# PR, with THIS action as a required status check. Malware can sit on a feature branch
-# but a 🚨 verdict fails the check and the ruleset refuses the merge into a protected
-# branch. (On GitHub Enterprise Server you *can* run a real pre-receive hook — that is a
-# separate adapter with a different scan scope; this action is the github.com path.)
-#
-# Zero-network, same as every other trigger: stat/grep/jq over the checked-out tree.
-# No detection logic lives here — it shells the unchanged wormhook-scan.sh `check` verb.
 name: wormhook supply-chain scan
 description: >-
   Scan the checked-out tree for npm/node + PyPI supply-chain malware (Shai-Hulud

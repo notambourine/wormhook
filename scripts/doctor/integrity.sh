@@ -1,11 +1,5 @@
 #!/bin/bash
-# SessionStart doctor — self-integrity of the engine + signature corpus (issue #61). One
-# appended `exit 0` silences every surface (the PreToolUse block, the UPS monitor, the launchd
-# sweep, the git hooks) while every scan keeps reporting clean; this closes that silent case.
-# It raises the bar to a COORDINATED edit only — an attacker who can edit the engine can also
-# regenerate the manifest, and there is no signing or self-healing here.
-#   🔴 hash mismatch — NOT silenceable, same class as the deps.sh jq alarm.
-#   🟡 manifest missing/empty — cannot verify; fail open, loud.  Match => silent.
+# This detects uncoordinated edits; an attacker who replaces the manifest can bypass it.
 set -uo pipefail
 
 # shellcheck source=scripts/doctor/_utils.sh disable=SC1091
@@ -24,7 +18,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   case "$line" in ''|'#'*) continue ;; esac
   want="${line%% *}"
   file="${line##* }"
-  # No slashes, so a doctored manifest cannot point the check outside scripts/.
+  # Reject paths outside scripts/.
   case "$file" in */*|'') bad="${bad:+$bad, }bad manifest entry"; continue ;; esac
   checked=$((checked+1))
   got="$(shasum -a 256 "$SCRIPTS_DIR/$file" 2>/dev/null | awk '{print $1}')"

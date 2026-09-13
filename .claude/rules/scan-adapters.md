@@ -6,60 +6,12 @@ paths:
   - "commands/wormhook-setup.md"
 ---
 
-# Out-of-band adapters (`wormhook-scan.sh`)
+# Maintain scan adapters
 
-The Claude hook is one trigger. `wormhook-scan.sh` adds the rest (verbs
-`scan`/`check`/`git-hook`/`shell-init`/`install-*`/`status`/`config`), plus the GitHub Action
-in `action.yml`. The user-facing installer is `/wormhook-setup`
-(`commands/wormhook-setup.md`).
+Reuse the engine and preserve its verdict across every entry point.
 
-Doctor soft nudges are silenceable via
-`WORMHOOK_SKIP_{RG,SFW,VET,COVERAGE,CICD,DRIFT,SHELLGUARD,SIGAGE}=1` (or
-`WORMHOOK_DOCTOR_QUIET=1` for all), set in settings.json `env`. A silenced nudge degrades to
-⚪, never to actual silence. The jq 🔴 (`doctor/deps.sh`) and the tamper 🔴
-(`doctor/integrity.sh`) are NOT silenceable.
-
-- **Adapters never duplicate detection.** Every verb drives the unchanged `wormhook.sh` by
-  synthesizing the same stdin payload Claude sends: `SessionStart` for fast,
-  `PostToolUse`+`npm install` for `--deep` (forces T2). A new pattern or grep belongs in
-  `malware-patterns.sh`, never in the CLI.
-- **Same injection rule as the engine.** Paths reach the engine only through `jq -n --arg`
-  payloads; the launchd plist escapes every value via `_xml`.
-- **The git hook must never self-flag.** Its body calls only the local CLI: no `curl|...|sh`,
-  no `MALWARE_DROPPER_TOKENS_RE` strings. `tests/run.sh` runs the real `install-git-hook`
-  body through the Tier-0 scan and asserts a clean verdict. Keep the body clean if you touch
-  `_hook_block`.
-- **Installers are opt-in, idempotent, non-clobbering, reversible.** `install-git-hook`
-  cooperates with an existing `core.hooksPath` and appends a `# >>> wormhook >>>` marker
-  block to a pre-existing hook, never overwriting; `uninstall-git-hook` removes only that
-  block. launchd label: `com.notambourine.wormhook-sweep` (org-namespaced, in no IOC set).
-- **Nothing a LaunchAgent execs may change identity on a release.** macOS re-alerts "can run
-  in the background" for every agent whose binary moves, so both installers write only on a
-  real diff. `install-launchd` byte-compares the rendered plist. `install-cli` writes
-  `~/.local/bin/wormhook-scan` as a launcher with a version-independent body, never a
-  symlink: a version-scoped plugin path (`.../plugins/cache/<mkt>/wormhook/<version>/`) would
-  retarget a symlink every release. The version lives in the pointer file
-  (`.../wormhook/install-path`), which no agent execs. The launcher reads
-  `installed_plugins.json` first so a plugin update between `install-cli` runs self-heals,
-  falls back to the pointer for a non-plugin install, and exits `2` (degraded, never a false
-  `0`) when neither resolves. It must `rm` a path before `cp`: writing onto a legacy symlink
-  would overwrite the install it targets.
-- **Discovery, not glob-literal.** A scan path resolves to the git repo(s) at or under it
-  (`node_modules` pruned); a `node_modules` or `dist` dir is never scanned as a project.
-  `--literal` bypasses discovery.
-- **Config is per-machine, never hardcoded.** Roots come from `$WORMHOOK_SCAN_ROOTS` or
-  `${XDG_CONFIG_HOME:-~/.config}/wormhook/scan-roots`; `wormhook-scan.conf.sample` seeds
-  `config --init`.
-- **Exec-guard layering: the git hook warns, `shell-init` blocks.** `shell-init` is the
-  out-of-Claude analog of the `PreToolUse` block. Scoped to `npm`/`pnpm`/`yarn`/`bun`/`npx`,
-  deliberately NOT `node` (too hot a path, version-manager breakage), `command`-based so it
-  never self-recurses, fails open if the CLI is absent, and loads after nvm/asdf. Keep it
-  opt-in. Do not add `node`.
-- **`action.yml` is a thin `check`-verb wrapper** mapping the `0`/`1`/`2` exit contract to
-  job pass/fail. No detection logic, no signatures, no network. It gates the merge (required
-  status check plus a force-push-blocking ruleset), not the push, because github.com has no
-  `pre-receive`. Its embedded `run:` shell is not covered by the `scripts/*.sh` shellcheck
-  glob and `actionlint` rejects action-metadata files. Lint it by extracting
-  `.runs.steps[].run` into `shellcheck`.
-- Editing `wormhook-scan.sh`, `action.yml`, or `commands/wormhook-setup.md` is a behavior
-  change: bump `plugin.json`.
+- Synthesize hook payloads with `jq --arg`; never duplicate detection in adapters. Return 0 for clean, 1 for findings, and 2 for degraded coverage. Keep git hooks advisory and let shell guards block only findings.
+- Keep installers opt-in, idempotent, reversible, and non-clobbering. Preserve existing git hooks and hook paths. Escape plist values. Keep generated hook bodies free of dropper tokens so they cannot self-flag.
+- Keep executable launcher identity stable across releases to avoid repeated macOS background-item alerts. Prefer the installed-plugin manifest, then the pointer file. Bake the config path into the launcher for launchd environments without XDG variables. Remove legacy symlinks before copying over them.
+- Discover repositories beneath scan roots while pruning dependencies. Honor literal mode and per-machine config. Load optional package-manager wrappers after version managers, compose with Socket Firewall, and never wrap node. Keep double-underscore helpers: Claude shell snapshots omit single-underscore functions.
+- Keep the Action a verdict adapter. Require a protected-branch check to gate merges. Bump plugin metadata for adapter behavior changes and verify emitted shell code as well as the generator.

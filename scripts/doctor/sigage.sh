@@ -1,8 +1,4 @@
 #!/bin/bash
-# SessionStart doctor — signature-corpus age. Detection is retrospective and nothing else fails
-# when the corpus goes stale, so a clean engine can be catching only last year's worms.
-#   🟡 older than WORMHOOK_SIGAGE_MAX_DAYS (default 60) — run /update (silenceable).
-#   ⚪ silenced, or WORMHOOK_SIGNATURES_ASOF missing/malformed.  Fresh => silent.
 set -uo pipefail
 
 # shellcheck source=scripts/doctor/_utils.sh disable=SC1091

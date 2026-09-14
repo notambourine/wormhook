@@ -637,10 +637,33 @@ done
 if [[ -x "$CASE_DIR/base/find" && -x "$CASE_DIR/base/grep" && ! -e "$CASE_DIR/base/timeout" ]]; then
   _ok "base tools only: farm resolves base tools and excludes timeout"
 else _bad "base tools only: farm resolves base tools and excludes timeout"; fi
+cat > "$CASE_DIR/no-optional.sh" <<'SH'
+command() {
+  case "$*" in '-v timeout'|'-v gtimeout'|'-v rg') return 1 ;; esac
+  builtin command "$@"
+}
+SH
 OUT="$(printf '%s' "$(_payload PostToolUse 'npm install')" | HOME="$CASE_HOME" XDG_CACHE_HOME="$CASE_CACHE" \
-  PATH="$CASE_DIR/base" bash "$ENGINE" 2>/dev/null)"
+  BASH_ENV="$CASE_DIR/no-optional.sh" PATH="$CASE_DIR/base" bash "$ENGINE" 2>/dev/null)"
 assert_jq "base tools only: no Homebrew-only dependency degrades the scan" "$OUT" \
   '.verdict=="green"'
+
+_mktemp_case
+sed -n '/^_wh_run()/,/^)/p' "$ENGINE" > "$CASE_DIR/watchdog.sh"
+printf '\nWH_TIMEOUT=\n_wh_run "$@"\n' >> "$CASE_DIR/watchdog.sh"
+OUT="$(bash "$CASE_DIR/watchdog.sh" 1 printf 'complete')"
+if [[ $? == 0 && "$OUT" == complete ]]; then _ok "watchdog: preserves successful output"
+else _bad "watchdog: preserves successful output"; fi
+bash "$CASE_DIR/watchdog.sh" 1 bash -c 'exit 7'
+if [[ $? == 7 ]]; then _ok "watchdog: preserves command failure"
+else _bad "watchdog: preserves command failure"; fi
+SECONDS=0
+OUT="$(bash "$CASE_DIR/watchdog.sh" 1 find "$CASE_CWD" -maxdepth 0 \
+  -exec bash -c 'trap "" TERM; sleep 4; printf leaked' \; 2>/dev/null)"
+watchdog_rc=$?
+if [[ "$watchdog_rc" == 124 && "$SECONDS" -lt 3 && -z "$OUT" ]]; then
+  _ok "watchdog: expires and stops TERM-resistant descendants"
+else _bad "watchdog: expires and stops TERM-resistant descendants"; fi
 
 _mktemp_case
 mkdir -p "$CASE_DIR/bin"

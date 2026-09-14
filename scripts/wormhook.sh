@@ -133,19 +133,26 @@ _rg_ok() {  # 0 => rg compiles this pattern; a grep-only signature falls back, n
 
 # macOS ships no timeout(1), so a missing binary must not cost coverage.
 WH_TIMEOUT=$(command -v timeout || command -v gtimeout || true)
-_wh_run() {  # $1=seconds, rest=command -> 124 when the bound expires
+_wh_run() (  # $1=seconds, rest=command -> 124 when the bound expires
   local secs="$1"; shift
   [[ -n "$WH_TIMEOUT" ]] && { "$WH_TIMEOUT" "$secs" "$@"; return; }
+  # Job control gives the scan and its children a private process group.
+  set -m
   "$@" &
   local pid=$! ticks=0 limit=$((secs * 10))
+  set +m
   while kill -0 "$pid" 2>/dev/null; do
     if [[ "$ticks" -ge "$limit" ]]; then
-      kill -TERM "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; return 124
+      kill -TERM -- "-$pid" 2>/dev/null
+      sleep 0.1
+      kill -KILL -- "-$pid" 2>/dev/null
+      wait "$pid" 2>/dev/null
+      return 124
     fi
     ticks=$((ticks + 1)); sleep 0.1
   done
   wait "$pid"
-}
+)
 _cov() { [[ "$1" == 124 ]] && printf 'timed out' || printf 'failed (exit %s)' "$1"; }
 
 # Directory mtimes miss in-place overwrites; the TTL bounds this cache gap.

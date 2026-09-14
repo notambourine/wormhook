@@ -39,6 +39,13 @@
 
 set -uo pipefail
 
+# path_helper runs only in login shells, so launchd jobs never see /etc/paths.d.
+# Append, never prepend: a system binary of the same name keeps priority.
+for _p in /opt/homebrew/bin /usr/local/bin; do
+  case ":$PATH:" in *":$_p:"*) : ;; *) [[ -d "$_p" ]] && PATH="$PATH:$_p" ;; esac
+done
+unset _p
+
 command -v jq &>/dev/null || { echo "Error: jq required" >&2; exit 1; }
 
 # Bash 3.2 and BSD date lack a subsecond clock.
@@ -124,6 +131,23 @@ _rg_ok() {  # 0 => rg compiles this pattern; a grep-only signature falls back, n
   [[ $? -ne 2 ]]
 }
 
+# macOS ships no timeout(1), so a missing binary must not cost coverage.
+WH_TIMEOUT=$(command -v timeout || command -v gtimeout || true)
+_wh_run() {  # $1=seconds, rest=command -> 124 when the bound expires
+  local secs="$1"; shift
+  [[ -n "$WH_TIMEOUT" ]] && { "$WH_TIMEOUT" "$secs" "$@"; return; }
+  "$@" &
+  local pid=$! ticks=0 limit=$((secs * 10))
+  while kill -0 "$pid" 2>/dev/null; do
+    if [[ "$ticks" -ge "$limit" ]]; then
+      kill -TERM "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; return 124
+    fi
+    ticks=$((ticks + 1)); sleep 0.1
+  done
+  wait "$pid"
+}
+_cov() { [[ "$1" == 124 ]] && printf 'timed out' || printf 'failed (exit %s)' "$1"; }
+
 # Directory mtimes miss in-place overwrites; the TTL bounds this cache gap.
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/notambourine/malware-scan"
 MARKER="$CACHE_DIR/$(printf '%s' "$CWD" | shasum -a 256 | awk '{print $1}')"
@@ -132,7 +156,7 @@ _tree_mtime() {
   local statv=(stat -c %Y)
   stat -f %m "$NODE_MODULES" &>/dev/null && statv=(stat -f %m)
   local m
-  m=$(timeout 5 find "$NODE_MODULES" -maxdepth 2 \( -name .cache -o -name .vite \) -prune -o -type d -exec "${statv[@]}" {} + 2>/dev/null | sort -rn | sed -n '1p') || return 1
+  m=$(_wh_run 5 find "$NODE_MODULES" -maxdepth 2 \( -name .cache -o -name .vite \) -prune -o -type d -exec "${statv[@]}" {} + 2>/dev/null | sort -rn | sed -n '1p') || return 1
   printf '%s' "${m:-0}"
 }
 _scan_key() {
@@ -515,8 +539,8 @@ for _u in "$HOME"/.local/lib/python*/site-packages \
 done
 pth_files=()
 if [[ ${#py_roots[@]} -gt 0 ]]; then
-  py_paths=$(timeout 5 find "${py_roots[@]}" -maxdepth 5 -name '*.pth' -type f 2>/dev/null) ||
-    warn "Python .pth scan failed or timed out (coverage incomplete)"
+  py_paths=$(_wh_run 5 find "${py_roots[@]}" -maxdepth 5 -name '*.pth' -type f 2>/dev/null) ||
+    warn "Python .pth scan $(_cov $?) (coverage incomplete)"
   while IFS= read -r _p; do [[ -n "$_p" ]] && pth_files+=("$_p"); done <<<"$py_paths"
 fi
 for _t in "${TARGET_DIRS[@]}"; do
@@ -559,8 +583,8 @@ fi
 
 so_files=()
 if [[ ${#py_roots[@]} -gt 0 ]]; then
-  py_paths=$(timeout 5 find "${py_roots[@]}" -maxdepth 5 -name '*.abi3.so' -type f 2>/dev/null) ||
-    warn "Python native-module scan failed or timed out (coverage incomplete)"
+  py_paths=$(_wh_run 5 find "${py_roots[@]}" -maxdepth 5 -name '*.abi3.so' -type f 2>/dev/null) ||
+    warn "Python native-module scan $(_cov $?) (coverage incomplete)"
   while IFS= read -r _s; do [[ -n "$_s" ]] && so_files+=("$_s"); done <<<"$py_paths"
 fi
 for _t in "${TARGET_DIRS[@]}"; do
@@ -753,9 +777,9 @@ if [[ "$RUN_T2" == 1 && -d "$NODE_MODULES" ]]; then
     if [[ $first == 1 ]]; then find_expr+=( -name "$n" ); first=0; else find_expr+=( -o -name "$n" ); fi
   done
   # Capture output directly so the timeout status survives.
-  ioc_paths=$(timeout 20 find "$NODE_MODULES" -maxdepth 6 \( "${find_expr[@]}" \) -type f 2>/dev/null)
+  ioc_paths=$(_wh_run 20 find "$NODE_MODULES" -maxdepth 6 \( "${find_expr[@]}" \) -type f 2>/dev/null)
   ioc_rc=$?
-  [[ "$ioc_rc" -eq 0 ]] || warn "node_modules IOC-filename walk failed or timed out (exit $ioc_rc; coverage incomplete)"
+  [[ "$ioc_rc" -eq 0 ]] || warn "node_modules IOC-filename walk $(_cov "$ioc_rc") (coverage incomplete)"
   while IFS= read -r path; do
     [[ -z "$path" ]] && continue
     base="${path##*/}"
@@ -804,14 +828,14 @@ BODY
   # Set the engine label before scanning to preserve the scan exit status.
   if _rg_ok "$MALWARE_CONTENT_RE"; then
     t2_engine="rg"
-    hit_out=$(timeout 20 "$RG_BIN" -la --max-count=1 --no-ignore --hidden \
+    hit_out=$(_wh_run 20 "$RG_BIN" -la --max-count=1 --no-ignore --hidden \
       -g '*.{js,mjs,cjs}' -e "$MALWARE_CONTENT_RE" "$NODE_MODULES" 2>/dev/null)
   else
     t2_engine="grep fallback; rg missing or pattern incompatible"
-    hit_out=$(timeout 20 grep -rlEm1 --include="*.js" --include="*.mjs" --include="*.cjs" "$MALWARE_CONTENT_RE" "$NODE_MODULES" 2>/dev/null)
+    hit_out=$(_wh_run 20 grep -rlEm1 --include="*.js" --include="*.mjs" --include="*.cjs" "$MALWARE_CONTENT_RE" "$NODE_MODULES" 2>/dev/null)
   fi
   t2_rc=$?
-  [[ "$t2_rc" -le 1 ]] || warn "node_modules content scan ($t2_engine) failed or timed out (exit $t2_rc; coverage incomplete)"
+  [[ "$t2_rc" -le 1 ]] || warn "node_modules content scan ($t2_engine) $(_cov "$t2_rc") (coverage incomplete)"
   hitfile=$(head -n1 <<<"$hit_out")
   if [[ -n "$hitfile" ]]; then
     matched="(unidentified)"

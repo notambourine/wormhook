@@ -1,6 +1,13 @@
 #!/bin/bash
 set -uo pipefail
 
+# path_helper runs only in login shells, so launchd jobs never see /etc/paths.d.
+# Append, never prepend: a system binary of the same name keeps priority.
+for _p in /opt/homebrew/bin /usr/local/bin; do
+  case ":$PATH:" in *":$_p:"*) : ;; *) [[ -d "$_p" ]] && PATH="$PATH:$_p" ;; esac
+done
+unset _p
+
 command -v jq >/dev/null 2>&1 || { echo "wormhook-scan: jq required (brew install jq)" >&2; exit 2; }
 
 SOURCE="${BASH_SOURCE[0]}"

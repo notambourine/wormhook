@@ -626,6 +626,22 @@ assert_jq "T2: fingerprint timeout reports degraded coverage" "$OUT" \
 if [[ ! -d "$CASE_CACHE/notambourine/malware-scan" ]]; then _ok "T2 fingerprint failure: no cache written"
 else _bad "T2 fingerprint failure: no cache written"; fi
 
+# launchd omits Homebrew, so a dependency outside this list degrades every sweep.
+_mktemp_case
+mkdir -p "$CASE_DIR/base" "$CASE_CWD/node_modules/lib"
+printf 'module.exports=1;\n' > "$CASE_CWD/node_modules/lib/index.js"
+for _b in bash sh jq find grep sed awk sort uniq head cut cat tr wc ls stat shasum \
+          date dirname mkdir mv rm chmod readlink sleep mktemp; do
+  _p="$(command -v "$_b" 2>/dev/null)" && ln -sf "$_p" "$CASE_DIR/base/$_b"
+done
+if [[ -x "$CASE_DIR/base/find" && -x "$CASE_DIR/base/grep" && ! -e "$CASE_DIR/base/timeout" ]]; then
+  _ok "base tools only: farm resolves base tools and excludes timeout"
+else _bad "base tools only: farm resolves base tools and excludes timeout"; fi
+OUT="$(printf '%s' "$(_payload PostToolUse 'npm install')" | HOME="$CASE_HOME" XDG_CACHE_HOME="$CASE_CACHE" \
+  PATH="$CASE_DIR/base" bash "$ENGINE" 2>/dev/null)"
+assert_jq "base tools only: no Homebrew-only dependency degrades the scan" "$OUT" \
+  '.verdict=="green"'
+
 _mktemp_case
 mkdir -p "$CASE_DIR/bin"
 cat > "$CASE_DIR/bin/rg" <<'SH'

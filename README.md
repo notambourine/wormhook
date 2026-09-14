@@ -7,7 +7,7 @@ claude plugin marketplace add notambourine/claude
 claude plugin install wormhook@notambourine --scope user
 ```
 
-Requires Bash, `jq`, and `timeout` (GNU coreutils on macOS). Install `rg` for faster content scans; otherwise wormhook uses `grep`.
+Requires Bash and `jq`. Install `timeout` (GNU coreutils on macOS) to bound scan walks and `rg` for faster content scans; otherwise wormhook uses a built-in watchdog and `grep`.
 
 | Trigger | Coverage | Finding |
 | --- | --- | --- |

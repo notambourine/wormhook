@@ -1,7 +1,7 @@
 {
   "$schema": "https://www.schemastore.org/claude-code-plugin-manifest.json",
   "name": "wormhook",
-  "version": "0.32.0",
+  "version": "0.32.1",
   "description": "Local supply-chain malware detection for Claude Code. Matches Shai-Hulud, ChainDrop, Miasma/Hades, Axios, SANDWORM_MODE, node-ipc, and TrapDoor indicators through filenames, hashes, source patterns, and persistence artifacts. Blocks guarded commands and human turns on findings in agent hooks, MCP configuration, Python startup files, git hooks, project source, and dependencies.",
   "author": {
     "name": "NoTambourine LLC",

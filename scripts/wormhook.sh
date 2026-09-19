@@ -1,42 +1,4 @@
 #!/bin/bash
-# CISA: https://www.cisa.gov/news-events/alerts/2025/09/23/widespread-supply-chain-compromise-impacting-npm-ecosystem
-
-# Datadog: https://securitylabs.datadoghq.com/articles/shai-hulud-2.0-npm-worm/
-
-# Microsoft: https://www.microsoft.com/en-us/security/blog/2025/12/09/shai-hulud-2-0-guidance-for-detecting-investigating-and-defending-against-the-supply-chain-attack/
-
-# Wiz (Mini): https://www.wiz.io/blog/mini-shai-hulud-strikes-again-tanstack-more-npm-packages-compromised
-
-# Semgrep: https://semgrep.dev/blog/2026/axios-supply-chain-incident-indicators-of-compromise-and-how-to-contain-the-threat/
-
-# Socket: https://socket.dev/blog/sandworm-mode-npm-worm-ai-toolchain-poisoning
-
-# Socket (Jun 2026): https://socket.dev/blog/mini-shai-hulud-miasma-and-hades-worms-target-bioinformatics-and-mcp-developers-via-malicious
-
-# Snyk (AntV, May 2026): https://snyk.io/blog/mini-shai-hulud-antv-npm-supply-chain-attack/
-
-# Unit42 (TeamPCP/npm landscape): https://unit42.paloaltonetworks.com/monitoring-npm-supply-chain-attacks/
-
-# Mend (SAP-CAP via Claude Code): https://www.mend.io/blog/shai-hulud-sap-cap-supply-chain-attack-claude-code/
-
-# Microsoft (AsyncAPI/Miasma, Jul 2026): https://www.microsoft.com/en-us/security/blog/2026/07/15/unpacking-asyncapi-npm-supply-chain-compromise-import-time-payload-delivery/
-
-# Elastic (ChainDrop, Aug 2026): https://www.elastic.co/security-labs/shai-hulud-chaindrop-npm-supply-chain
-
-# Microsoft (ChainDrop, Aug 2026): https://www.microsoft.com/en-us/security/blog/2026/08/04/chaindrop-supply-chain-compromise-anatomy-self-propagating-worm/
-
-# JFrog (ChainDrop, Aug 2026): https://research.jfrog.com/post/shai-hulud-is-back-august/
-
-# Phoenix Security: https://phoenix.security/trapdoor-supply-chain-ai-poisoning-npm-pypi-crates/
-
-# Checkmarx: https://checkmarx.com/zero-post/npm-hit-by-shai-hulud-the-self-replicating-supply-chain-attack/
-
-# StepSecurity: https://www.stepsecurity.io/blog/node-ipc-npm-supply-chain-attack
-
-# Unit42 (ChainDrop): https://unit42.paloaltonetworks.com/chaindrop-npm-worm-analysis/
-
-# A9-0522 markers are field-observed; no vendor advisory is available.
-
 set -uo pipefail
 
 # path_helper runs only in login shells, so launchd jobs never see /etc/paths.d.
@@ -167,12 +129,16 @@ _tree_mtime() {
   printf '%s' "${m:-0}"
 }
 _scan_key() {
-  local c m sig=none
+  local c m scanner sig=none
+  scanner=$(shasum -a 256 "$SCRIPT_DIR/wormhook.sh" "$MALWARE_PATTERNS" | shasum -a 256 | awk '{print $1}') || return 1
   for c in package-lock.json pnpm-lock.yaml yarn.lock bun.lock; do
-    [[ -f "$CWD/$c" ]] && { sig=$(shasum -a 256 "$CWD/$c" | awk '{print $1}'); break; }
+    if [[ -f "$CWD/$c" ]]; then
+      sig=$(shasum -a 256 "$CWD/$c" | awk '{print $1}') || return 1
+      break
+    fi
   done
   m=$(_tree_mtime) || return 1
-  printf '%s:%s' "$sig" "$m"
+  printf '%s:%s:%s' "$scanner" "$sig" "$m"
 }
 deps_changed() {
   [[ -d "$NODE_MODULES" ]] || return 1
@@ -322,6 +288,12 @@ _persist_scan() {
         _c="${_raw//__HOME__/$HOME}"
         _c="${_c//__CWD__/$_target}"
         if [[ "$_op" == "-f" && -f "$_c" ]] || [[ "$_op" == "-d" && -d "$_c" ]] || [[ "$_op" == "-e" && -e "$_c" ]]; then
+          if [[ -n "${WORMHOOK_PERSIST_CONTENT_RE[$_i]}" ]]; then
+            local content_rc=0
+            grep -qE "${WORMHOOK_PERSIST_CONTENT_RE[$_i]}" "$_c" 2>/dev/null || content_rc=$?
+            [[ "$content_rc" -le 1 ]] || warn "persistence content scan failed: $_c (coverage incomplete)"
+            [[ "$content_rc" == 0 ]] || continue
+          fi
           WH_PERSIST_HIT="$_c"; break 2
         fi
       done
@@ -395,6 +367,22 @@ its presence means the payload has ALREADY run on this machine." \
   3. Audit ~/.ssh/known_hosts + authorized_keys and recent SSH egress for spread
   4. Rotate ALL credentials (SSH keys, GitHub PATs/OIDC, npm/PyPI tokens, cloud)
   5. Inspect site-packages *.pth startup hooks (the PyPI delivery vector)"
+        ;;
+      canisterworm)
+        persistence_check "CANISTERWORM PERSISTENCE DETECTED" \
+          "Found the CanisterWorm canister ID in $WH_PERSIST_HIT.
+The Python implant polls the canister for executable payloads and persists through a user service." \
+          "  1. Isolate this host and preserve the pgmon service and payload for investigation.
+  2. Inspect ~/.config/systemd/user/pgmon.service and running Python processes.
+  3. Rebuild affected environments and rotate exposed npm, GitHub, and cloud credentials from a clean host."
+        ;;
+      sysvinit_monitor)
+        persistence_check "SYSVINIT TOKEN-MONITOR PERSISTENCE DETECTED" \
+          "Found Mini Shai-Hulud token-monitor persistence: $WH_PERSIST_HIT.
+The OpenAPI compromise installs a monitor that executes a stored handler when its GitHub token stops working." \
+          "  1. Isolate this host and preserve the monitor, service, and stored handler.
+  2. Neutralize persistence before revoking the monitored token; revocation can trigger the handler.
+  3. Rebuild affected environments and rotate exposed credentials from a clean host."
         ;;
       miasma_rat)
         # The space-delimited table cannot represent the macOS Application Support path.
@@ -516,9 +504,7 @@ BODY
   done
 done
 
-_persist_scan 3 4   # gh_token_monitor, kitty_monitor
-_persist_scan 5     # hades_ssh
-_persist_scan 6     # miasma_rat
+_persist_scan 3 4 5 6 7 8
 
 
 # Do not run Python to discover roots: that would execute the startup hooks being scanned.
@@ -755,28 +741,14 @@ BODY
 fi
 
 
-# Common filenames require a matching hash; a name alone is insufficient.
-PAYLOAD_FILES=(
-  "setup_bun.js" "set_bun.js" "bun_environment.js" "com.apple.act.mond"
-  "c0nt3nts.json" "c9nt3nts.json" "3nvir0nm3nt.json" "cl0vd.json"
-  "actionsSecrets.json" "truffleSecrets.json" "gh-token-monitor.sh"
-)
-HASH_IOC_FILES=( "router_init.js" "router_runtime.js" "tanstack_runner.js" "opensearch_init.js" "setup_bun.js" "bun_environment.js" "math_init.js" "Math_Symbol.js" "setup.mjs" "node-ipc.cjs" )
-HASH_IOC_HASHES=(
-  "ab4fcadaec49c03278063dd269ea5eef82d24f2124a8e15d7b90f2fa8601266c"
-  "2ec78d556d696e208927cc503d48e4b5eb56b31abc2870c2ed2e98d6be27fc96"
-  "1e8538c6e0563d50da0f2e097e979ebd5294ce1defe01d0b9fe361ba3bed1898"
-  "a3894003ad1d293ba96d77881ccd2071446dc3f65f434669b49b3da92421901a"
-  "62ee164b9b306250c1172583f138c9614139264f889fa99614903c12755468d0"
-  "cbb9bc5a8496243e02f3cc080efbe3e4a1430ba0671f2e43a202bf45b05479cd"
-  "f099c5d9ec417d4445a0328ac0ada9cde79fc37410914103ae9c609cbc0ee068"
-  # Elastic names the same payload Math_Symbol.js; both basenames need hash checks.
-  "9fc2570b7cef51c1b8df116d144d11ff4096357be7d2c4c6367cfc2509cf1bcc"
-  "fd3ca4007b225fdf8de7af4345a19179d5efa8c4bb9205f88cda806e5684b1eb"
-  "54dc7ea54a1317cca0e890a2770630cf7fa6c97813e0cb9d2caa93012b350668"
-  # node-ipc.cjs is a legitimate entry point; require its payload hash.
-  "96097e0612d9575cb133021017fb1a5c68a03b60f9f3d24ebdc0e628d9034144"
-)
+_dependency_content_scan() {
+  if _rg_ok "$1"; then
+    _wh_run 20 "$RG_BIN" -la --max-count=1 --no-ignore --hidden \
+      -g '*.{js,mjs,cjs}' -e "$1" "$NODE_MODULES" 2>/dev/null
+  else
+    _wh_run 20 grep -rlEm1 --include="*.js" --include="*.mjs" --include="*.cjs" "$1" "$NODE_MODULES" 2>/dev/null
+  fi
+}
 
 if [[ "$RUN_T2" == 1 && -d "$NODE_MODULES" ]]; then
   find_expr=() ; first=1
@@ -832,17 +804,9 @@ BODY
     fi
   done <<<"$ioc_paths"
 
-  # Set the engine label before scanning to preserve the scan exit status.
-  if _rg_ok "$MALWARE_CONTENT_RE"; then
-    t2_engine="rg"
-    hit_out=$(_wh_run 20 "$RG_BIN" -la --max-count=1 --no-ignore --hidden \
-      -g '*.{js,mjs,cjs}' -e "$MALWARE_CONTENT_RE" "$NODE_MODULES" 2>/dev/null)
-  else
-    t2_engine="grep fallback; rg missing or pattern incompatible"
-    hit_out=$(_wh_run 20 grep -rlEm1 --include="*.js" --include="*.mjs" --include="*.cjs" "$MALWARE_CONTENT_RE" "$NODE_MODULES" 2>/dev/null)
-  fi
+  hit_out=$(_dependency_content_scan "$MALWARE_CONTENT_RE")
   t2_rc=$?
-  [[ "$t2_rc" -le 1 ]] || warn "node_modules content scan ($t2_engine) $(_cov "$t2_rc") (coverage incomplete)"
+  [[ "$t2_rc" -le 1 ]] || warn "node_modules content scan $(_cov "$t2_rc") (coverage incomplete)"
   hitfile=$(head -n1 <<<"$hit_out")
   if [[ -n "$hitfile" ]]; then
     matched="(unidentified)"
@@ -868,6 +832,12 @@ Immediate steps:
 BODY
 )"
   fi
+
+  warning_out=$(_dependency_content_scan "$MALWARE_CONTENT_WARN_RE")
+  warning_rc=$?
+  [[ "$warning_rc" -le 1 ]] || warn "node_modules warning scan $(_cov "$warning_rc") (coverage incomplete)"
+  warning_file=$(head -n1 <<<"$warning_out")
+  [[ -z "$warning_file" ]] || warn "review dependency code in $warning_file: credential access or obfuscation pattern; not a confirmed malware IOC"
 fi
 
 if [[ "$UPDATE_CACHE" == 1 && -z "$ALERTS" && -z "$WARNINGS" && -d "$NODE_MODULES" ]]; then

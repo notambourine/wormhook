@@ -32,19 +32,19 @@ jobs:
       - name: Install Claude Code CLI
         run: sfw npm install -g @anthropic-ai/claude-code
 
-      # Allow only the maintainer CLAUDE.md warning; all other schema findings fail.
+      # Allow only the root maintainer-context warning; all other schema findings fail.
       - name: Validate plugin schema
         run: |
           # GitHub runs `run:` under `bash -e`, so a bare assignment from a failing
           # command would abort before the allowlist below ever reads its output.
           rc=0; out=$(claude plugin validate . --strict 2>&1) || rc=$?
           printf '%s\n' "$out"
-          findings=$(printf '%s\n' "$out" | grep '❯' | grep -v 'CLAUDE.md at the plugin root' || true)
+          findings=$(printf '%s\n' "$out" | grep '❯' | grep -vF 'AGENTS.md at the plugin root' || true)
           if [ -n "$findings" ]; then
             echo "::error::unexpected validate findings (see above)"; exit 1
           fi
           # Non-zero with no findings left means it failed for a reason we cannot allowlist.
-          if [ "$rc" -ne 0 ] && ! printf '%s\n' "$out" | grep -q 'CLAUDE.md at the plugin root'; then
+          if [ "$rc" -ne 0 ] && ! printf '%s\n' "$out" | grep -qF 'AGENTS.md at the plugin root'; then
             exit "$rc"
           fi
 

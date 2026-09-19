@@ -1,13 +1,12 @@
 ---
 name: update
-description: 'Add detection for a new npm/PyPI supply-chain worm or campaign to wormhook. Use when a new advisory drops (Socket/Snyk/Wiz/Unit42/Mend/Microsoft/Datadog/CISA/JFrog) and you want to source its IOCs, verify them against primary sources, place each signature in the right tier, and open a patch PR. Triggers: "add a signature", "new Shai-Hulud variant", "update wormhook for <campaign>", "a new worm dropped".'
+description: Verify primary advisories and add local detection for supply-chain campaigns. Use for signature updates, new worm coverage, and campaign reviews.
 ---
 
 # Adding a new campaign to wormhook
 
-Turn a fresh advisory into a verified, correctly-tiered patch PR. Read the "Invariants" and
-"Working here" sections of [`CLAUDE.md`](../../../CLAUDE.md) first; this skill is the
-procedure, not a restatement of those rules.
+Turn a fresh advisory into a verified, correctly-tiered patch PR. Read
+[`AGENTS.md`](../../../AGENTS.md) first.
 
 The one rule that governs everything below: **a wrong block-tier signature is worse than an
 omission.** Every literal lands only after you have confirmed it verbatim against a named
@@ -57,11 +56,11 @@ drop it.
 | ...and it is unique enough to be block-safe in your own source | also add to `MALWARE_INJECT_RE` (Tier 1, project-source block) | `malware-patterns.sh` |
 | Attacker C2 / exfil host | `MALWARE_CONTENT_FINGERPRINTS` (escape the dots) | `malware-patterns.sh` |
 | Dropper string referenced from an agent/editor config | `MALWARE_DROPPER_TOKENS_RE` | `malware-patterns.sh` |
-| New persistence file / LaunchAgent / systemd unit | a Tier-0 file-existence check or loop | `wormhook.sh` |
+| New persistence file / LaunchAgent / systemd unit | Tier-0 path table; require content when the name is ambiguous | `malware-patterns.sh` |
 | New agent-config surface (e.g. a new editor's settings file) | the Tier-0 config-injection `cfg` loop | `wormhook.sh` |
 | `.pth` behavior / single-artifact `.pth` | `MALWARE_PTH_RE` / `MALWARE_PTH_IOC_NAME`+`_HASH` | `malware-patterns.sh` |
-| node_modules payload filename, name == proof | `PAYLOAD_FILES` | `wormhook.sh` |
-| ...filename that can be legit | `HASH_IOC_FILES` + `HASH_IOC_HASHES` (name + hash) | `wormhook.sh` |
+| node_modules payload filename, name == proof | `PAYLOAD_FILES` | `malware-patterns.sh` |
+| ...filename that can be legit | `HASH_IOC_FILES` + `HASH_IOC_HASHES` (name + hash) | `malware-patterns.sh` |
 
 Reject these as out of architecture. Note each in the PR; do not silently skip:
 
@@ -75,12 +74,8 @@ Reject these as out of architecture. Note each in the PR; do not silently skip:
 
 ## 4. Provenance
 
-Keep the three provenance surfaces in sync. They are the audit trail proving every signature
-traces to a real advisory:
-
-- the Sources header block in `scripts/wormhook.sh` (campaign line plus advisory URLs)
-- the "What it detects" list in `README.md`
-- the Sources section in `README.md`
+Keep advisory URLs beside the signatures in the corpus. Keep campaign coverage in the
+plugin description and operational limits in the README; do not duplicate IOC catalogs.
 
 ## 5. Bump and sync manifests
 
@@ -97,23 +92,23 @@ A behavioral change, meaning anything touching the scripts, MUST:
 
 ## 6. Verify the change
 
-```bash
-# Syntax under the REAL shebang shell (Apple bash 3.2 - a Homebrew bash hides 3.2-only errors)
-for f in scripts/*.sh; do /bin/bash -n "$f"; done
-shellcheck -S warning scripts/*.sh
-jq -e . hooks/hooks.json .claude-plugin/*.json >/dev/null
-```
+Leave schema checks, ShellCheck, and the full fixture harness to CI. Verify changed shell
+code under macOS `/bin/bash` 3.2 and reproduce new detections with inert fixtures. Isolate
+HOME, XDG cache/config, and working directories. Expect deny/block only for confirmed IOCs;
+ambiguous patterns produce yellow warnings. Add negative fixtures for plausible benign uses.
 
-Then smoke-test each new detection with a synthetic payload in an isolated temp `HOME` and
-`CWD`, so nothing touches real dirs. Expect a `deny` for block-tier, `🚨` for warn-tier, `🟢`
-for a clean tree:
+Regenerate the integrity manifest after changing the engine or corpus.
+
+For a single isolated reproduction:
 
 ```bash
-TMP=$(mktemp -d); FH="$TMP/home"; mkdir -p "$FH/proj"
-# ...plant the artifact under $TMP/proj or $FH...
-echo '{"tool_input":{"command":"npm install"},"cwd":"'"$TMP/proj"'","hook_event_name":"PreToolUse"}' \
-  | HOME="$FH" bash scripts/wormhook.sh | jq -r '.hookSpecificOutput.permissionDecision'
-rm -rf "$TMP"
+case_dir=$(mktemp -d); fixture_home="$case_dir/home"; mkdir -p "$fixture_home/proj"
+# Plant an inert artifact under the isolated home or project.
+jq -nc --arg cwd "$fixture_home/proj" \
+  '{tool_input:{command:"npm install"},cwd:$cwd,hook_event_name:"PreToolUse"}' \
+  | HOME="$fixture_home" XDG_CACHE_HOME="$case_dir/cache" XDG_CONFIG_HOME="$case_dir/config" \
+    /bin/bash scripts/wormhook.sh | jq -r '.hookSpecificOutput.permissionDecision'
+rm -rf "$case_dir"
 ```
 
 bash-3.2 gotcha: no contractions inside an `alert "..." "$(cat <<BODY ... BODY)"` body. The

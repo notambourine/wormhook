@@ -1,9 +1,0 @@
-# Maintain wormhook
-
-Keep detection local, blocking precise, and incomplete coverage visible.
-
-- Keep detection in `scripts/` and event wiring in `hooks/`. Put signatures in the corpus, never in adapters. Keep one registered object per event and make hook filters a superset of engine command classes. Preserve compound commands, environment prefixes, directory options, target directories, and workspace lifecycle checks.
-- Never cache persistence or time out source scans. Report degraded coverage and fail open on missing signatures or scan timeouts; never cache an incomplete result. Limit hard blocks to PreToolUse and UserPromptSubmit. Preserve their distinct decision schemas and keep clean prompts silent. Pass untrusted values through `jq --arg`.
-- Require primary-source evidence and near-zero false positives for blocking signatures. Move useful noisy detection to warnings. Follow `.claude/skills/` for campaign reviews and update the review date only after checking advisories. Keep quarantine opt-in, reversible, and exact-match-only; never kill, unload, or delete artifacts.
-- Follow the local maintainer instructions in `scripts/doctor/` and adapter rules in `.claude/rules/`. Keep missing-jq and integrity alarms unsilenceable. Source shared helpers; never execute them. Preserve Bash 3.2 compatibility and Bash/Zsh-compatible signature regexes. Avoid apostrophes in heredocs nested inside command substitution.
-- Regenerate the integrity manifest after engine or corpus edits. Bump plugin metadata for behavior changes. Keep operational guidance in the README and campaign/IOC detail in the plugin description. Publish through the existing `notambourine/claude` marketplace row; never add a marketplace here. Keep the root maintainer-context warning as the only schema-validation exception. Leave CI-covered checks to CI; use local checks to reproduce fixes and verify macOS compatibility.

@@ -108,8 +108,8 @@ mkdir -p "$CASE_CWD/node_modules/lib"
 printf '{"name":"x"}' > "$CASE_CWD/package.json"
 printf 'const _0x3a2ebe=_0x355e;\n' > "$CASE_CWD/node_modules/lib/index.js"
 OUT="$(_run_engine "$(_payload PostToolUse 'npm install')")"
-assert_jq "T2 node_modules: obfuscator.io accessor alias -> red" "$OUT" \
-  '.verdict=="red" and (.findings|map(.title)|any(contains("NPM SUPPLY-CHAIN MALWARE")))'
+assert_jq "T2 node_modules: obfuscator.io accessor alias needs review" "$OUT" \
+  '.verdict=="yellow" and (.systemMessage|contains("not a confirmed malware IOC"))'
 
 
 # The AWS SDK ships this endpoint; it must remain excluded from signatures.
@@ -724,6 +724,113 @@ done
 OUT="$(HOME="$CASE_HOME" bash "$SCAN_CLI" --help 2>/dev/null)"
 if [[ "$OUT" == *"eval \"\$(wormhook-scan shell-init)\""* ]]; then _ok "CLI help: prints shell-init command literally"
 else _bad "CLI help: prints shell-init command literally"; fi
+
+_canister='tdtqy-oyaaa-aaaae'; _canister="$_canister-af2dq-cai"
+_monitor='sysvinit-detect'; _monitor="$_monitor-fash"
+_guard='__DOG'; _guard="$_guard"'INSIDEPC'
+_wallet='0xa322E5f3D311D3080e6f0121'; _wallet="$_wallet"'063e9aDC2490Ef1a'
+
+for _ioc in "$_canister" "$_guard" "$_wallet"; do
+  _mktemp_case
+  printf 'const fixture = "%s";\n' "$_ioc" > "$CASE_CWD/fixture.js"
+  OUT="$(_run_engine "$(_payload PreToolUse 'npm run build')")"
+  assert_jq "campaign source: $_ioc blocks" "$OUT" '.hookSpecificOutput.permissionDecision=="deny"'
+  mkdir -p "$CASE_CWD/node_modules/lib"
+  mv "$CASE_CWD/fixture.js" "$CASE_CWD/node_modules/lib/fixture.js"
+  OUT="$(_run_engine "$(_payload PostToolUse 'npm install')")"
+  assert_jq "campaign dependency: $_ioc reports red" "$OUT" '.verdict=="red"'
+done
+
+_mktemp_case
+mkdir -p "$CASE_HOME/.local/share/pgmon" "$CASE_HOME/.config/systemd/user"
+printf 'print("PostgreSQL monitor")\n' > "$CASE_HOME/.local/share/pgmon/service.py"
+printf '[Service]\nDescription=PostgreSQL monitor\n' > "$CASE_HOME/.config/systemd/user/pgmon.service"
+OUT="$(_run_engine "$(_payload SessionStart)")"
+assert_jq "CanisterWorm: benign pgmon service stays clean" "$OUT" '.verdict=="green"'
+printf 'endpoint = "https://%s.raw.icp0.io/"\n' "$_canister" > "$CASE_HOME/.local/share/pgmon/service.py"
+OUT="$(_run_engine "$(_payload UserPromptSubmit)")"
+assert_jq "CanisterWorm: persisted Python payload blocks a turn" "$OUT" \
+  '.decision=="block" and (.systemMessage|contains("CANISTERWORM"))'
+
+_mktemp_case
+mkdir -p "$CASE_HOME/Library/LaunchAgents"
+printf '<plist/>\n' > "$CASE_HOME/Library/LaunchAgents/com.user.$_monitor.plist"
+OUT="$(_run_engine "$(_payload UserPromptSubmit)")"
+assert_jq "OpenAPI monitor: LaunchAgent blocks before token revocation" "$OUT" \
+  '.decision=="block" and (.systemMessage|contains("revocation can trigger"))'
+
+for _benign in 'console.log(JSON.stringify(process.env));' \
+  'const credentials = ".git-credentials";' 'const _0x3a2ebe=_0x355e;'; do
+  _mktemp_case
+  mkdir -p "$CASE_CWD/node_modules/lib"
+  printf '%s\n' "$_benign" > "$CASE_CWD/node_modules/lib/index.js"
+  OUT="$(_run_engine "$(_payload PreToolUse 'npm run build')")"
+  assert_jq "ambiguous dependency: $_benign warns without denying" "$OUT" \
+    '.verdict=="yellow" and (.hookSpecificOutput.permissionDecision // "allow")!="deny"'
+  OUT="$(_run_engine "$(_payload PostToolUse 'npm install')")"
+  assert_jq "ambiguous dependency: $_benign is not labeled malware" "$OUT" \
+    '.verdict=="yellow" and (.systemMessage|contains("not a confirmed malware IOC"))'
+  if [[ ! -d "$CASE_CACHE/notambourine/malware-scan" ]]; then _ok "warning is never cached as clean"
+  else _bad "warning is never cached as clean"; fi
+done
+HOME="$CASE_HOME" XDG_CACHE_HOME="$CASE_CACHE" /bin/bash "$SCAN_CLI" check "$CASE_CWD" --deep >/dev/null 2>&1
+if [[ $? == 2 ]]; then _ok "CLI: ambiguous dependency returns review-needed exit 2"
+else _bad "CLI: ambiguous dependency returns review-needed exit 2"; fi
+
+_mktemp_case
+mkdir -p "$CASE_DIR/bin" "$CASE_CWD/node_modules/lib"
+printf '#!/bin/sh\nexit 2\n' > "$CASE_DIR/bin/rg"
+chmod +x "$CASE_DIR/bin/rg"
+printf 'const fixture = "%s";\n' "$_canister" > "$CASE_CWD/node_modules/lib/index.js"
+OUT="$(printf '%s' "$(_payload PostToolUse 'npm install')" | HOME="$CASE_HOME" XDG_CACHE_HOME="$CASE_CACHE" \
+  PATH="$CASE_DIR/bin:$PATH" /bin/bash "$ENGINE" 2>/dev/null)"
+assert_jq "BSD grep fallback: new campaign indicator reports red" "$OUT" '.verdict=="red"'
+printf 'console.log(JSON.stringify(process.env));\n' > "$CASE_CWD/node_modules/lib/index.js"
+OUT="$(printf '%s' "$(_payload PostToolUse 'npm install')" | HOME="$CASE_HOME" XDG_CACHE_HOME="$CASE_CACHE" \
+  PATH="$CASE_DIR/bin:$PATH" /bin/bash "$ENGINE" 2>/dev/null)"
+assert_jq "BSD grep fallback: ambiguous indicator warns" "$OUT" '.verdict=="yellow"'
+
+for _changed in malware-patterns.sh wormhook.sh; do
+  _mktemp_case
+  mkdir -p "$CASE_DIR/engine" "$CASE_CWD/node_modules/lib"
+  cp "$ENGINE" "$(dirname "$ENGINE")/malware-patterns.sh" "$CASE_DIR/engine/"
+  _saved_engine="$ENGINE"; ENGINE="$CASE_DIR/engine/wormhook.sh"
+  printf 'module.exports = 1;\n' > "$CASE_CWD/node_modules/lib/index.js"
+  OUT="$(_run_engine "$(_payload PostToolUse 'npm install')")"
+  assert_jq "cache: clean baseline before $_changed update" "$OUT" '.verdict=="green"'
+  OUT="$(_run_engine "$(_payload SessionStart)")"
+  assert_jq "cache: unchanged scanner reuses clean result" "$OUT" \
+    '.verdict=="green" and (.systemMessage|contains("cached, deps unchanged"))'
+  if [[ "$_changed" == malware-patterns.sh ]]; then
+    printf 'const fixture = "wormhook-regression-corpus-update";\n' > "$CASE_CWD/node_modules/lib/index.js"
+    # shellcheck disable=SC2016
+    printf '\nMALWARE_CONTENT_RE="$MALWARE_CONTENT_RE|wormhook-regression-corpus-update"\n' >> "$CASE_DIR/engine/$_changed"
+  else
+    printf '%s\n' "$MAL_DECODE_EVAL" > "$CASE_CWD/node_modules/lib/index.js"
+    printf '\n:\n' >> "$CASE_DIR/engine/$_changed"
+  fi
+  OUT="$(_run_engine "$(_payload SessionStart)")"
+  assert_jq "cache: $_changed update catches an in-place dependency change" "$OUT" '.verdict=="red"'
+  ENGINE="$_saved_engine"
+done
+
+_mktemp_case
+mkdir -p "$CASE_DIR/bin" "$CASE_CWD/node_modules/lib"
+printf 'module.exports=1;\n' > "$CASE_CWD/node_modules/lib/index.js"
+printf '{"lockfileVersion":3}\n' > "$CASE_CWD/package-lock.json"
+_real_shasum="$(command -v shasum)"
+cat > "$CASE_DIR/bin/shasum" <<INNER
+#!/bin/sh
+case "\$*" in *package-lock.json*) exit 1 ;; esac
+exec "$_real_shasum" "\$@"
+INNER
+chmod +x "$CASE_DIR/bin/shasum"
+OUT="$(printf '%s' "$(_payload PostToolUse 'npm install')" | HOME="$CASE_HOME" XDG_CACHE_HOME="$CASE_CACHE" \
+  PATH="$CASE_DIR/bin:$PATH" /bin/bash "$ENGINE" 2>/dev/null)"
+assert_jq "cache: unreadable lockfile leaves coverage degraded" "$OUT" \
+  '.verdict=="yellow" and (.systemMessage|contains("cache not refreshed"))'
+if [[ ! -d "$CASE_CACHE/notambourine/malware-scan" ]]; then _ok "cache: failed lockfile hash cannot create a clean marker"
+else _bad "cache: failed lockfile hash cannot create a clean marker"; fi
 
 echo
 printf 'tests: %d passed, %d failed\n' "$PASS" "$FAIL"

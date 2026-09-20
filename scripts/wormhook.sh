@@ -411,7 +411,8 @@ cfg_list=(
 )
 for _t in "${TARGET_DIRS[@]}"; do
   cfg_list+=( "$_t/.claude/settings.json" "$_t/.cursor/mcp.json"
-              "$_t/.vscode/mcp.json"      "$_t/.vscode/tasks.json" )
+              "$_t/.vscode/mcp.json"      "$_t/.vscode/tasks.json"
+              "$_t/.vscode/settings.json" )
 done
 for cfg in "${cfg_list[@]}"; do
   [[ -f "$cfg" ]] || continue
@@ -425,7 +426,8 @@ A value in $cfg references a known agent-hijack dropper, or pipes a remote scrip
 This is how Mini Shai-Hulud / SANDWORM_MODE re-runs its payload on every Claude Code,
 Cursor, VS Code, Continue, or Windsurf launch — as a SessionStart hook or a rogue
 MCP server (even after deleting the dropper file), or as an inline curl-to-shell hook
-command with no dropper file at all.
+command with no dropper file at all. PolinRider instead adds a folderOpen task that
+runs a file presented as a font through node.
 ${COMMAND:+Command blocked: $COMMAND}
 
 Immediate steps:
@@ -705,9 +707,11 @@ BODY
   for _t in "${TARGET_DIRS[@]}"; do
     case "$_t" in "$CWD"|"$CWD"/*) : ;; *) src_roots+=("$_t") ;; esac
   done
+  # Socket: PolinRider hides the loader in files presented as fonts, so scan those too.
   if _rg_ok "$MALWARE_INJECT_RE"; then
     inject_out=$("$RG_BIN" -la --no-ignore --hidden \
       -g '*.{js,mjs,cjs,ts,mts,cts,jsx,tsx}' \
+      -g '*.{woff,woff2,eot,ttf,otf}' \
       -g '!node_modules' -g '!.git' \
       -g '!dist' -g '!build' -g '!.next' -g '!.output' \
       -e "$MALWARE_INJECT_RE" "${src_roots[@]}" 2>/dev/null)
@@ -716,6 +720,8 @@ BODY
       --include="*.js"  --include="*.mjs" --include="*.cjs" \
       --include="*.ts"  --include="*.mts" --include="*.cts" \
       --include="*.jsx" --include="*.tsx" \
+      --include="*.woff" --include="*.woff2" \
+      --include="*.eot" --include="*.ttf" --include="*.otf" \
       --exclude-dir=node_modules --exclude-dir=.git \
       --exclude-dir=dist --exclude-dir=build --exclude-dir=.next --exclude-dir=.output \
       2>/dev/null)

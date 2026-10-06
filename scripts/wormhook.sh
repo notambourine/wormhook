@@ -201,6 +201,24 @@ FINDINGS=""
 WARNINGS=""
 warn() { WARNINGS="${WARNINGS:+$WARNINGS; }$1"; }
 
+# Claude Code kills a slow prompt hook without output; a dead scanner's marker is the only report.
+WH_RUNNING_DIR="$CACHE_DIR/running" WH_RUNNING=""
+if [[ "$MODE" == prompt_submit || "$MODE" == session_start ]]; then
+  _cwd_key=$(printf '%s' "$CWD" | shasum -a 256 | awk '{print $1}')
+  _killed=0
+  for _m in "$WH_RUNNING_DIR/$_cwd_key".*; do
+    [[ -f "$_m" ]] || continue
+    read -r _pid < "$_m"
+    [[ "$_pid" =~ ^[0-9]+$ ]] && kill -0 "$_pid" 2>/dev/null && continue
+    rm -f "$_m"; _killed=1
+  done
+  [[ "$_killed" == 0 ]] || warn "an earlier prompt-time source scan was killed by the hook timeout; that turn went unscanned"
+  if [[ "$MODE" == prompt_submit ]]; then
+    _sid=$(printf '%s' "$PAYLOAD" | jq -r '.session_id // ""' | tr -cd 'A-Za-z0-9_-')
+    WH_RUNNING="$WH_RUNNING_DIR/$_cwd_key.${_sid:-none}"
+  fi
+fi
+
 WORMHOOK_QUARANTINE="${WORMHOOK_QUARANTINE:-}"
 QUARANTINE_LOG="$CACHE_DIR/quarantine.log"
 WH_QUAR_NOTE=""
@@ -711,6 +729,7 @@ BODY
   for _t in "${TARGET_DIRS[@]}"; do
     case "$_t" in "$CWD"|"$CWD"/*) : ;; *) src_roots+=("$_t") ;; esac
   done
+  [[ -z "$WH_RUNNING" ]] || { mkdir -p "$WH_RUNNING_DIR" && printf '%s\n' "$$" > "$WH_RUNNING"; } 2>/dev/null
   # Socket: PolinRider hides the loader in files presented as fonts, so scan those too.
   if _rg_ok "$MALWARE_INJECT_RE"; then
     inject_out=$("$RG_BIN" -la --no-ignore --hidden \
@@ -731,6 +750,7 @@ BODY
       2>/dev/null)
   fi
   src_rc=$?
+  [[ -z "$WH_RUNNING" ]] || rm -f "$WH_RUNNING"
   [[ "$src_rc" -le 1 ]] || warn "source content scan failed (exit $src_rc; coverage incomplete)"
   inject_hit=$(head -n1 <<<"$inject_out")
   if [[ -n "$inject_hit" ]]; then

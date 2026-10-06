@@ -17,7 +17,7 @@ Requires Bash and `jq`. Install `timeout` (GNU coreutils on macOS) to bound scan
 | After installs or supported git updates | Persistence and source; JavaScript dependencies after installs or when stale | Warn |
 | Session start | Persistence and source; dependencies when stale; health checks | Warn |
 
-Clean prompts stay silent. Other clean scans show 🟢. Matches show 🚨. Ambiguous patterns and incomplete coverage show 🟡 and leave interactive commands unblocked. See `hooks/` for command filters and `scripts/` for detection and advisory sources.
+Clean prompts stay silent. Other clean scans show 🟢. Matches show 🚨. Ambiguous patterns and incomplete coverage show 🟡 and leave interactive commands unblocked. A prompt scan that outlives the hook timeout is killed silently; the next prompt or session start reports it, after that turn has run unscanned. See `hooks/` for command filters and `scripts/` for detection and advisory sources.
 
 Run `/wormhook-setup` in Claude Code to install the CLI and choose optional git hooks or scheduled scans. Then:
 

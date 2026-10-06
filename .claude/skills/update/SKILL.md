@@ -8,10 +8,9 @@ description: Verify primary advisories and add local detection for supply-chain 
 Turn a fresh advisory into a verified, correctly-tiered patch PR. Read
 [`AGENTS.md`](../../../AGENTS.md) first.
 
-The one rule that governs everything below: **a wrong block-tier signature is worse than an
-omission.** Every literal lands only after you have confirmed it verbatim against a named
-primary advisory. Distrust IOC aggregators and your own prior summaries. Confabulated
-indicators are the failure mode this process exists to catch.
+**A wrong block-tier signature is worse than an omission.** Land a literal only after
+confirming it verbatim against a named primary advisory. Distrust IOC aggregators and your own
+prior summaries; they invent indicators.
 
 ## 1. Source
 
@@ -24,11 +23,10 @@ Pull IOCs from primary vendor and government advisories, not secondary roundups:
   - SHA256 of single-artifact payloads, useful only when paired with a known filename
   - attacker-owned C2 and exfil hosts
   - unique payload-internal strings (obfuscation salts, C2 command keywords, kill-switch log
-    lines, env-var guards). Highest-value, lowest-FP class.
+    lines, env-var guards); these carry the lowest false-positive risk
   - agent-config injection specifics: which file under `.claude`/`.cursor`/`.continue`/
     `.vscode`, and the exact injected key, value, and command
-- If you fan out research agents, treat their output as candidates, never facts. Agents pad
-  and confabulate. The list always shrinks at step 2.
+- Treat research-agent output as candidates, never facts; expect step 2 to drop some.
 
 ## 2. Verify (the hard gate)
 
@@ -47,8 +45,8 @@ it is already covered; `m-kosche.com` already matches `t.m-kosche.com`. Read
 
 ## 3. Place by tier (blast-radius rule)
 
-FP-tolerance scales with blast radius. Route a noisy-but-real signature down a tier; do not
-drop it.
+Tolerate false positives only where a hit warns rather than blocks. Route a noisy but real
+signature down a tier; do not drop it.
 
 | IOC kind | Home | File |
 |---|---|---|
@@ -68,8 +66,8 @@ Reject these as out of architecture. Note each in the PR; do not silently skip:
   GitHub API.
 - Blanket SHA256 hashing of every dep. wormhook hashes only when a filename already matched.
 - Anything needing a registry or network lookup (version-age, typosquat, maintainer-change).
-  Ceded to Socket Firewall and `vet` by design; see the README "deliberately doesn't do".
-- Generic filenames (`index.js`, `execution.js`) as bare `PAYLOAD_FILES`. They FP. Only their
+  Socket Firewall and `vet` cover these.
+- Generic filenames (`index.js`, `execution.js`) as bare `PAYLOAD_FILES`. Only their
   path-anchored form, inside a specific config dir, is block-safe.
 
 ## 4. Provenance
@@ -79,16 +77,15 @@ plugin description and operational limits in the README; do not duplicate IOC ca
 
 ## 5. Bump and sync manifests
 
-A behavioral change, meaning anything touching the scripts, MUST:
+Any change to `scripts/` or `hooks/` must:
 
-- bump `version` in `.claude-plugin/plugin.json`, or a CI tripwire fails the PR
+- bump `version` in `.claude-plugin/plugin.json`; CI fails the PR otherwise
 - set `WORMHOOK_SIGNATURES_ASOF` in `scripts/malware-patterns.sh` to today, including when a
-  sweep lands nothing new. The constant means "verified current as of", and `doctor/sigage.sh`
-  nags when it ages out.
-- update `.claude-plugin/plugin.json`'s `description` if the new campaign belongs in the full
-  install/inspect description. The browse tagline lives in the `notambourine/claude` catalog
-  row, not this repo; touch it there only if the one-line pitch genuinely changed. The two are
-  NOT kept in sync and there is no parity check.
+  sweep lands nothing new. It means "verified current as of"; the sigage doctor warns when it
+  ages out.
+- update the plugin `description` if the campaign belongs there. The one-line browse tagline
+  lives in the `notambourine/claude` catalog row; change it only if the pitch changed. Nothing
+  keeps the two in sync.
 
 ## 6. Verify the change
 
@@ -111,12 +108,8 @@ jq -nc --arg cwd "$fixture_home/proj" \
 rm -rf "$case_dir"
 ```
 
-bash-3.2 gotcha: no contractions inside an `alert "..." "$(cat <<BODY ... BODY)"` body. The
-3.2 command-substitution parser miscounts a lone `'`. Write "do not", not "don't".
-
 ## 7. PR
 
-Branch off `main`, draft PR by default. Subject in the `feat:` or `fix:` form with the version
-(`feat: Tier-0 detection for <campaign> (vX.Y.Z)`). In the body, list each landed signature
-with its primary-source URL, and call out anything deliberately rejected and why, so the
-reviewer can see the coverage boundary was a choice.
+Branch off `main` and open a draft PR. Use a `signatures: <outcome> (vX.Y.Z)` subject. In the
+body, list each landed signature with its primary-source URL and each rejected candidate with
+the reason.

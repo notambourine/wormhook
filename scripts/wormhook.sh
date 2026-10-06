@@ -27,15 +27,16 @@ fi
 PAYLOAD=$(cat)
 COMMAND=$(echo "$PAYLOAD" | jq -r '.tool_input.command // ""')
 CWD=$(echo "$PAYLOAD" | jq -r '.cwd // ""')
+# An empty cwd would turn every relative scan root into a path under /.
+[[ -n "$CWD" ]] || CWD="$PWD"
 EVENT=$(echo "$PAYLOAD" | jq -r '.hook_event_name // ""')
 # Older hook configs omit the event name.
 [[ -z "$EVENT" ]] && { [[ -n "$COMMAND" ]] && EVENT="PreToolUse" || EVENT="SessionStart"; }
 
-NODE_MODULES="${CWD}/node_modules"
-
 # Keep hooks.json filters broader than these regexes or valid commands will skip scanning.
-GATE_RE='^\s*(npm (ci|install|i|add|run|test|exec)|pnpm (install|i|add|run|exec|dlx)|yarn( (install|add|run))?|bun (install|add|i|run|x)|npx|node)(\s|$)'
-INSTALL_RE='^\s*(npm (ci|install|i|add)|pnpm (install|i|add)|yarn( (install|add))?|bun (install|add|i))(\s|$)'
+GATE_RE='^\s*(npm (ci|install|i|it|install-test|add|update|up|upgrade|rebuild|run|start|test|t|exec|x)|pnpm (install|i|add|update|up|rebuild|run|exec|dlx)|yarn( (install|add|run))?|bun (install|add|i|update|run|x)|npx|bunx|pnpx|node)(\s|$)'
+# Bare yarn installs, but `yarn <script>` runs a script; only flags may follow a bare install.
+INSTALL_RE='^\s*(npm (ci|install|i|it|install-test|add|update|up|upgrade|rebuild)|pnpm (install|i|add|update|up|rebuild)|yarn( (install|add|up|upgrade)|( -[^[:space:]]+)+|$)|bun (install|add|i|update))(\s|$)'
 # Scan after git writes the new files.
 GIT_RE='^\s*git\s+(-C\s+\S+\s+)?(pull|merge|checkout|switch|rebase)(\s|$)'
 # Python loads .pth files before user code, so scan before starting the interpreter.
@@ -119,7 +120,11 @@ _cov() { [[ "$1" == 124 ]] && printf 'timed out' || printf 'failed (exit %s)' "$
 
 # Directory mtimes miss in-place overwrites; the TTL bounds this cache gap.
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/notambourine/malware-scan"
-MARKER="$CACHE_DIR/$(printf '%s' "$CWD" | shasum -a 256 | awk '{print $1}')"
+_use_root() {  # $1 = target dir -> WH_ROOT, NODE_MODULES, MARKER
+  WH_ROOT="$1"
+  NODE_MODULES="$1/node_modules"
+  MARKER="$CACHE_DIR/$(printf '%s' "$1" | shasum -a 256 | awk '{print $1}')"
+}
 _tree_mtime() {
   # Changes inside .cache and .vite remain invisible to the cache until its TTL expires.
   local statv=(stat -c %Y)
@@ -132,8 +137,8 @@ _scan_key() {
   local c m scanner sig=none
   scanner=$(shasum -a 256 "$SCRIPT_DIR/wormhook.sh" "$MALWARE_PATTERNS" | shasum -a 256 | awk '{print $1}') || return 1
   for c in package-lock.json pnpm-lock.yaml yarn.lock bun.lock; do
-    if [[ -f "$CWD/$c" ]]; then
-      sig=$(shasum -a 256 "$CWD/$c" | awk '{print $1}') || return 1
+    if [[ -f "$WH_ROOT/$c" ]]; then
+      sig=$(shasum -a 256 "$WH_ROOT/$c" | awk '{print $1}') || return 1
       break
     fi
   done
@@ -152,14 +157,15 @@ deps_changed() {
 }
 
 MODE=session_start
-RUN_T1=0 RUN_T2=0 UPDATE_CACHE=0
+# T2: empty skips dependencies, "changed" honors the cache, "always" rescans.
+RUN_T1=0 T2=""
 case "$EVENT" in
   PreToolUse)
     MODE=pre_tool
     if _cmd_class "$GATE_RE"; then
       RUN_T1=1
       # An install has not written its dependencies yet; PostToolUse scans the result.
-      _cmd_class "$INSTALL_RE" || { deps_changed && { RUN_T2=1; UPDATE_CACHE=1; }; }
+      _cmd_class "$INSTALL_RE" || T2=changed
     elif _cmd_class "$PYGATE_RE"; then
       RUN_T1=1
     else
@@ -169,10 +175,9 @@ case "$EVENT" in
   PostToolUse)
     MODE=post_tool
     if _cmd_class "$INSTALL_RE"; then
-      RUN_T1=1; RUN_T2=1; UPDATE_CACHE=1
+      RUN_T1=1; T2=always
     elif _cmd_class "$GIT_RE"; then
-      RUN_T1=1
-      deps_changed && { RUN_T2=1; UPDATE_CACHE=1; }
+      RUN_T1=1; T2=changed
     elif _cmd_class "$PYINSTALL_RE"; then
       RUN_T1=1
     else
@@ -180,15 +185,12 @@ case "$EVENT" in
     fi
     ;;
   UserPromptSubmit)
-    MODE=prompt_submit; RUN_T1=1; RUN_T2=0
+    MODE=prompt_submit; RUN_T1=1
     ;;
   *)
-    MODE=session_start; RUN_T1=1
-    deps_changed && { RUN_T2=1; UPDATE_CACHE=1; }
+    MODE=session_start; RUN_T1=1; T2=changed
     ;;
 esac
-
-
 
 # Use permissionDecision: exit 2 sends the reason only to the model.
 ALERTS="" SUMMARY=""
@@ -259,8 +261,6 @@ EOF
   fi
 }
 _in_list() { local n="$1"; shift; local x; for x in "$@"; do [[ "$x" == "$n" ]] && return 0; done; return 1; }
-
-
 
 # Bash 3.2 can misparse apostrophes inside a heredoc nested in command substitution.
 persistence_check() {  # $1=title  $2=lead  $3=numbered-steps
@@ -398,11 +398,18 @@ means the payload has ALREADY run on this machine." \
   4. Rotate ALL credentials (npm/GitHub tokens, SSH keys, cloud + k8s creds)
   5. Audit installed @asyncapi/* versions against the Microsoft advisory list"
         ;;
+      *)
+        # A signature row without remediation text must still alert.
+        persistence_check "PERSISTENCE ARTIFACT DETECTED (${WORMHOOK_PERSIST_KEYS[$_i]})" \
+          "Found a known campaign persistence artifact: $WH_PERSIST_HIT" \
+          "  1. Isolate this host and preserve the artifact for investigation.
+  2. Rotate exposed credentials from a clean host."
+        ;;
     esac
   done
 }
 
-_persist_scan 0 1 2   # axios_rat, shai_hulud_2, agent_hijack
+_persist_scan "${!WORMHOOK_PERSIST_KEYS[@]}"
 
 # Config entries can survive deletion of the dropper that wrote them.
 cfg_list=(
@@ -417,7 +424,9 @@ done
 for cfg in "${cfg_list[@]}"; do
   [[ -f "$cfg" ]] || continue
   # Permission rules can mention remote execution without executing it.
-  cfg_hit=$(jq -r 'del(.permissions) | [.. | strings] | .[]' "$cfg" 2>/dev/null \
+  # VS Code writes JSONC that jq rejects; scan its text minus line comments instead.
+  cfg_hit=$({ jq -r 'del(.permissions)? // . | [.. | strings] | .[]' "$cfg" 2>/dev/null ||
+      sed -E 's#^[[:space:]]*//.*##' "$cfg"; } \
     | grep -iE "$MALWARE_DROPPER_TOKENS_RE|$MALWARE_REMOTE_EXEC_RE" | head -1)
   [[ -z "$cfg_hit" ]] && continue
   alert "INJECTED AGENT CONFIG DETECTED" "$(cat <<BODY
@@ -440,7 +449,6 @@ Immediate steps:
 BODY
 )"
 done
-
 
 # Prose may document dropper tokens; only check its hidden Unicode.
 zw_list=( "${cfg_list[@]}" "${HOME}/.claude/CLAUDE.md" "${HOME}/AGENTS.md" "${HOME}/.cursorrules" )
@@ -505,9 +513,6 @@ BODY
 )"
   done
 done
-
-_persist_scan 3 4 5 6 7 8
-
 
 # Do not run Python to discover roots: that would execute the startup hooks being scanned.
 py_roots=()
@@ -634,7 +639,7 @@ if [[ "$RUN_T1" == 1 ]]; then
     bad_scripts=$(jq -r '.scripts // {} | to_entries[]
       | select(.key | test("^(pre|post)?install$|^prepare$"))
       | .value' "$PKG_JSON" 2>/dev/null \
-      | grep -iE "$MALWARE_DROPPER_TOKENS_RE"'|bun\.sh/install|node .*\.cjs.*curl|curl[^|]*\|[^|]*(sh|node|bash)' || true)
+      | grep -iE "$MALWARE_LIFECYCLE_RE" || true)
     [[ -z "$bad_scripts" ]] && continue
     alert "MALICIOUS LIFECYCLE SCRIPT IN package.json" "$(cat <<BODY
 $PKG_JSON has an install-lifecycle script matching a known Shai-Hulud dropper:
@@ -701,7 +706,6 @@ BODY
     fi
   done
 
-
   # Do not time out Tier 1: a partial source scan could miss a blocking finding.
   src_roots=("$CWD")
   for _t in "${TARGET_DIRS[@]}"; do
@@ -746,7 +750,6 @@ BODY
   fi
 fi
 
-
 _dependency_content_scan() {
   if _rg_ok "$1"; then
     _wh_run 20 "$RG_BIN" -la --max-count=1 --no-ignore --hidden \
@@ -756,8 +759,9 @@ _dependency_content_scan() {
   fi
 }
 
-if [[ "$RUN_T2" == 1 && -d "$NODE_MODULES" ]]; then
-  find_expr=() ; first=1
+_scan_deps() {  # scans $NODE_MODULES
+  local find_expr=() first=1 n ioc_paths ioc_rc path base actual expected
+  local hit_out t2_rc hitfile matched pattern warning_out warning_rc warning_file
   for n in "${PAYLOAD_FILES[@]}" "${HASH_IOC_FILES[@]}"; do
     if [[ $first == 1 ]]; then find_expr+=( -name "$n" ); first=0; else find_expr+=( -o -name "$n" ); fi
   done
@@ -844,14 +848,24 @@ BODY
   [[ "$warning_rc" -le 1 ]] || warn "node_modules warning scan $(_cov "$warning_rc") (coverage incomplete)"
   warning_file=$(head -n1 <<<"$warning_out")
   [[ -z "$warning_file" ]] || warn "review dependency code in $warning_file: credential access or obfuscation pattern; not a confirmed malware IOC"
-fi
+}
 
-if [[ "$UPDATE_CACHE" == 1 && -z "$ALERTS" && -z "$WARNINGS" && -d "$NODE_MODULES" ]]; then
-  if cache_key=$(_scan_key); then
-    mkdir -p "$CACHE_DIR" && printf '%s\n' "$cache_key" > "$MARKER"
-  else
-    warn "dependency cache fingerprint failed or timed out (cache not refreshed)"
-  fi
+# A command aimed at another directory installs or runs that directory's dependencies.
+T2_SCANNED=0 T2_CACHED=0
+if [[ -n "$T2" ]]; then
+  for _t in "${TARGET_DIRS[@]}"; do
+    _use_root "$_t"
+    [[ -d "$NODE_MODULES" ]] || continue
+    if [[ "$T2" == changed ]] && ! deps_changed; then T2_CACHED=1; continue; fi
+    T2_SCANNED=1
+    _scan_deps
+    [[ -z "$ALERTS" && -z "$WARNINGS" ]] || continue
+    if cache_key=$(_scan_key); then
+      mkdir -p "$CACHE_DIR" && printf '%s\n' "$cache_key" > "$MARKER"
+    else
+      warn "dependency cache fingerprint failed or timed out (cache not refreshed)"
+    fi
+  done
 fi
 
 if [[ "$MODE" != "pre_tool" && -n "$ALERTS" ]]; then
@@ -873,9 +887,9 @@ fi
 if [[ -z "$ALERTS" ]]; then
   SCOPE="persistence"
   [[ "$RUN_T1" == 1 ]] && SCOPE+=" + source"
-  if [[ "$RUN_T2" == 1 && -d "$NODE_MODULES" ]]; then
+  if [[ "$T2_SCANNED" == 1 ]]; then
     SCOPE+=" + node_modules"
-  elif [[ -d "$NODE_MODULES" ]]; then
+  elif [[ "$T2_CACHED" == 1 ]]; then
     SCOPE+=" + node_modules (cached, deps unchanged)"
   fi
   # An absent start time must not become zero, which would report the whole Unix epoch.

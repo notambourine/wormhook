@@ -832,6 +832,41 @@ assert_jq "cache: unreadable lockfile leaves coverage degraded" "$OUT" \
 if [[ ! -d "$CASE_CACHE/notambourine/malware-scan" ]]; then _ok "cache: failed lockfile hash cannot create a clean marker"
 else _bad "cache: failed lockfile hash cannot create a clean marker"; fi
 
+_mktemp_case
+mkdir -p "$CASE_CWD/.vscode"
+printf '{\n  // See https://go.microsoft.com/fwlink/?LinkId=733558\n  "tasks": [{ "command": "%s", }]\n}\n' \
+  "$MAL_CURL_SH" > "$CASE_CWD/.vscode/tasks.json"
+OUT="$(_run_engine "$(_payload UserPromptSubmit)")"
+assert_jq "agent config: JSONC tasks.json is scanned, not skipped" "$OUT" \
+  '.decision=="block" and (.systemMessage|contains("INJECTED AGENT CONFIG"))'
+printf '{\n  // %s\n  "tasks": []\n}\n' "$MAL_CURL_SH" > "$CASE_CWD/.vscode/tasks.json"
+OUT="$(_run_engine "$(_payload UserPromptSubmit)")"
+assert_jq "FP guard: JSONC line comment does not block" "${OUT:-{}}" '(.decision // "") != "block"'
+
+_mktemp_case
+mkdir -p "$CASE_CWD/sub/node_modules/lib"
+printf '%s\n' "$MAL_DECODE_EVAL" > "$CASE_CWD/sub/node_modules/lib/index.js"
+OUT="$(_run_engine "$(_payload PostToolUse 'cd sub && npm install')")"
+assert_jq "T2: cd sub && npm install scans sub/node_modules" "$OUT" \
+  '.verdict=="red" and (.findings|map(.title)|any(contains("NPM SUPPLY-CHAIN MALWARE")))'
+
+_mktemp_case
+mkdir -p "$CASE_CWD/node_modules/lib"
+printf '%s\n' "$MAL_DECODE_EVAL" > "$CASE_CWD/node_modules/lib/index.js"
+OUT="$(_run_engine "$(_payload PreToolUse 'yarn build')")"
+assert_jq "T2: yarn <script> scans dependencies before running" "$OUT" \
+  '.hookSpecificOutput.permissionDecision=="deny"'
+OUT="$(_run_engine "$(_payload PreToolUse 'yarn --frozen-lockfile')")"
+assert_jq "T2: bare yarn with flags is an install, scanned afterward" "$OUT" \
+  '(.hookSpecificOutput.permissionDecision // "allow") != "deny"'
+
+for _cmd in 'bunx some-cli' 'npm start' 'npm update'; do
+  _mktemp_case
+  printf '%s\n' "$MAL_INJECT" > "$CASE_CWD/index.js"
+  OUT="$(_run_engine "$(_payload PreToolUse "$_cmd")")"
+  assert_jq "gate: $_cmd scans project source" "$OUT" '.hookSpecificOutput.permissionDecision=="deny"'
+done
+
 echo
 printf 'tests: %d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

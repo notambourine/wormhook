@@ -818,7 +818,7 @@ File: $path
 Bad hash: $expected
 ${COMMAND:+Command blocked: $COMMAND}
 
-Source: a known payload hash - TanStack wave (getsession exfil) or ChainDrop/keyv (Aug 2026).
+Source: a known campaign payload hash (TanStack, ChainDrop, OpenAPI, node-ipc, or MemTensor sckit).
 Action:
   1. Run: command rm -rf "$NODE_MODULES"
   2. Pin @tanstack/* versions in lockfile with verified 'integrity' fields

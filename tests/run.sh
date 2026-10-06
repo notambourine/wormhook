@@ -111,6 +111,21 @@ OUT="$(_run_engine "$(_payload PostToolUse 'npm install')")"
 assert_jq "T2 node_modules: obfuscator.io accessor alias needs review" "$OUT" \
   '.verdict=="yellow" and (.systemMessage|contains("not a confirmed malware IOC"))'
 
+_mktemp_case
+mkdir -p "$CASE_CWD/node_modules/@memtensor/plugin/lib"
+printf '{"name":"x"}' > "$CASE_CWD/package.json"
+printf 'const { launchStageZero } = require("./sckit");\n' > "$CASE_CWD/node_modules/@memtensor/plugin/lib/sckit.js"
+OUT="$(_run_engine "$(_payload PostToolUse 'npm install')")"
+assert_jq "T2 node_modules: MemTensor sckit launcher -> red" "$OUT" \
+  '.verdict=="red" and (.findings|map(.title)|any(contains("NPM SUPPLY-CHAIN MALWARE")))'
+
+_mktemp_case
+mkdir -p "$CASE_CWD/node_modules/tool/.sckit/darwin-arm64"
+printf '{"name":"x"}' > "$CASE_CWD/package.json"
+printf 'benign\n' > "$CASE_CWD/node_modules/tool/.sckit/darwin-arm64/sckit"
+OUT="$(_run_engine "$(_payload PostToolUse 'npm install')")"
+assert_jq "T2 node_modules: sckit name without its hash stays clean" "$OUT" '.verdict!="red"'
+
 
 # The AWS SDK ships this endpoint; it must remain excluded from signatures.
 _mktemp_case

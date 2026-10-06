@@ -111,6 +111,21 @@ OUT="$(_run_engine "$(_payload PostToolUse 'npm install')")"
 assert_jq "T2 node_modules: obfuscator.io accessor alias needs review" "$OUT" \
   '.verdict=="yellow" and (.systemMessage|contains("not a confirmed malware IOC"))'
 
+_mktemp_case
+mkdir -p "$CASE_CWD/node_modules/@memtensor/plugin/lib"
+printf '{"name":"x"}' > "$CASE_CWD/package.json"
+printf 'const { launchStageZero } = require("./sckit");\n' > "$CASE_CWD/node_modules/@memtensor/plugin/lib/sckit.js"
+OUT="$(_run_engine "$(_payload PostToolUse 'npm install')")"
+assert_jq "T2 node_modules: MemTensor sckit launcher -> red" "$OUT" \
+  '.verdict=="red" and (.findings|map(.title)|any(contains("NPM SUPPLY-CHAIN MALWARE")))'
+
+_mktemp_case
+mkdir -p "$CASE_CWD/node_modules/tool/.sckit/darwin-arm64"
+printf '{"name":"x"}' > "$CASE_CWD/package.json"
+printf 'benign\n' > "$CASE_CWD/node_modules/tool/.sckit/darwin-arm64/sckit"
+OUT="$(_run_engine "$(_payload PostToolUse 'npm install')")"
+assert_jq "T2 node_modules: sckit name without its hash stays clean" "$OUT" '.verdict!="red"'
+
 
 # The AWS SDK ships this endpoint; it must remain excluded from signatures.
 _mktemp_case
@@ -866,6 +881,29 @@ for _cmd in 'bunx some-cli' 'npm start' 'npm update'; do
   OUT="$(_run_engine "$(_payload PreToolUse "$_cmd")")"
   assert_jq "gate: $_cmd scans project source" "$OUT" '.hookSpecificOutput.permissionDecision=="deny"'
 done
+
+_mktemp_case
+OUT="$(_run_engine "$(_payload UserPromptSubmit)")"
+_left=$(find "$CASE_CACHE" -path '*/running/*' -type f 2>/dev/null)
+if [[ -z "$OUT" && -z "$_left" ]]; then _ok "prompt marker: clean prompt is silent and leaves no marker"
+else _bad "prompt marker: clean prompt is silent and leaves no marker" "out=$OUT left=$_left"; fi
+_running="$CASE_CACHE/notambourine/malware-scan/running"
+_key=$(printf '%s' "$CASE_CWD" | shasum -a 256 | awk '{print $1}')
+mkdir -p "$_running"
+printf '%s\n' "$$" > "$_running/$_key.live"
+OUT="$(_run_engine "$(_payload UserPromptSubmit)")"
+assert_jq "prompt marker: a running scan in another session stays silent" "${OUT:-{}}" '(.verdict // "") != "yellow"'
+sh -c 'exit 0' & _dead=$!; wait "$_dead"
+printf '%s\n' "$_dead" > "$_running/$_key.dead"
+OUT="$(_run_engine "$(_payload UserPromptSubmit)")"
+assert_jq "prompt marker: a killed prompt scan is reported" "$OUT" \
+  '.verdict=="yellow" and (.systemMessage|contains("killed by the hook timeout"))'
+OUT="$(_run_engine "$(_payload UserPromptSubmit)")"
+assert_jq "prompt marker: a killed scan is reported once" "${OUT:-{}}" '(.verdict // "") != "yellow"'
+printf '%s\n' "$_dead" > "$_running/$_key.dead"
+OUT="$(_run_engine "$(_payload SessionStart)")"
+assert_jq "prompt marker: session start reports a killed prompt scan" "$OUT" \
+  '.verdict=="yellow" and (.systemMessage|contains("killed by the hook timeout"))'
 
 echo
 printf 'tests: %d passed, %d failed\n' "$PASS" "$FAIL"

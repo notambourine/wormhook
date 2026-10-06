@@ -7,7 +7,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/wormhook.sh\"",
-            "if": "Bash(npm *)|Bash(npx *)|Bash(pnpm *)|Bash(yarn *)|Bash(bun *)|Bash(node *)|Bash(pip *)|Bash(pip3 *)|Bash(pipx *)|Bash(uv *)|Bash(python *)|Bash(python3 *)",
+            "if": "Bash(npm *)|Bash(npx *)|Bash(pnpm *)|Bash(yarn *)|Bash(bun *)|Bash(bunx *)|Bash(pnpx *)|Bash(node *)|Bash(pip *)|Bash(pip3 *)|Bash(pipx *)|Bash(uv *)|Bash(python *)|Bash(python3 *)",
             "timeout": 300,
             "statusMessage": "wormhook: scanning for supply-chain malware..."
           }
@@ -21,7 +21,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/wormhook.sh\"",
-            "if": "Bash(npm *)|Bash(pnpm *)|Bash(yarn *)|Bash(bun *)|Bash(git pull*)|Bash(git merge*)|Bash(git checkout*)|Bash(git switch*)|Bash(git rebase*)|Bash(pip *)|Bash(pip3 *)|Bash(pipx *)|Bash(uv *)",
+            "if": "Bash(npm *)|Bash(pnpm *)|Bash(yarn *)|Bash(bun *)|Bash(git -C *)|Bash(git pull*)|Bash(git merge*)|Bash(git checkout*)|Bash(git switch*)|Bash(git rebase*)|Bash(pip *)|Bash(pip3 *)|Bash(pipx *)|Bash(uv *)",
             "timeout": 300,
             "statusMessage": "wormhook: post-op supply-chain scan..."
           }

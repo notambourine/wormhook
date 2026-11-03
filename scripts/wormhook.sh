@@ -416,7 +416,7 @@ means the payload has ALREADY run on this machine." \
   4. Rotate ALL credentials (npm/GitHub tokens, SSH keys, cloud + k8s creds)
   5. Audit installed @asyncapi/* versions against the Microsoft advisory list"
         ;;
-      testmetest)
+      testmetest|testmetest_runtime)
         persistence_check "TESTMETEST WORM PERSISTENCE DETECTED" \
           "Found testmetest worm persistence: $WH_PERSIST_HIT
 The worm installs net-health-checker and pkg-runtime login units and wipes the home
@@ -828,13 +828,14 @@ File: $path
 Bad hash: $expected
 ${COMMAND:+Command blocked: $COMMAND}
 
-Source: a known campaign payload hash (TanStack, ChainDrop, OpenAPI, node-ipc, or MemTensor sckit).
+Source: a known campaign payload hash (TanStack, ChainDrop/tensorlake, OpenAPI, node-ipc, MemTensor sckit, SubQuery, or testmetest).
 Action:
   1. Run: command rm -rf "$NODE_MODULES"
-  2. Pin @tanstack/* versions in lockfile with verified 'integrity' fields
+  2. Pin the package that shipped this file to a release before the compromise,
+     with verified 'integrity' fields
   3. Rotate: npm tokens, GitHub PATs/OIDC trusts, AWS/Vault/k8s creds
   4. Audit ~/.claude/ and project .vscode/ for router_runtime.js, setup.mjs,
-     and unfamiliar entries in settings.json hooks or tasks.json
+     .github/init.js, and unfamiliar entries in settings.json hooks or tasks.json
   5. git log --all --author=claude@users.noreply.github.com  (impersonation)
   6. Report: support@npmjs.com
 BODY

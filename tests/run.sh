@@ -157,6 +157,38 @@ OUT="$(_run_engine "$(_payload UserPromptSubmit)")"
 assert_jq "T0 persistence: testmetest login unit blocks (UPS)" "$OUT" \
   '.decision=="block" and (.systemMessage|contains("TESTMETEST WORM PERSISTENCE"))'
 
+_pkr='pkg-run'; _pkr="${_pkr}time.service"
+_mktemp_case
+mkdir -p "$CASE_HOME/.config/systemd/user"
+printf '[Service]\nExecStart=/usr/bin/true\n' > "$CASE_HOME/.config/systemd/user/$_pkr"
+OUT="$(_run_engine "$(_payload UserPromptSubmit)")"
+assert_jq "FP guard: benign pkg-runtime unit does not block" "${OUT:-{}}" '(.decision // "") != "block"'
+printf '[Service]\nExecStart=python3 %%h/.local/share/runtimes/sync.py\n' > "$CASE_HOME/.config/systemd/user/$_pkr"
+OUT="$(_run_engine "$(_payload UserPromptSubmit)")"
+assert_jq "T0 persistence: pkg-runtime unit running runtimes/sync.py blocks (UPS)" "$OUT" \
+  '.decision=="block" and (.systemMessage|contains("TESTMETEST WORM PERSISTENCE"))'
+
+_lock='tmp.ts0180'; _lock="${_lock}51808.lock"
+_cia='ci-artif'; _cia="${_cia}acts.dev"
+for _sq in "$_lock" "$_cia"; do
+  _mktemp_case
+  mkdir -p "$CASE_CWD/node_modules/@subql/common/dist/project/readers"
+  printf '{"name":"x"}' > "$CASE_CWD/package.json"
+  printf 'const v = "%s";\n' "$_sq" > "$CASE_CWD/node_modules/@subql/common/dist/project/readers/manifest-cache.js"
+  OUT="$(_run_engine "$(_payload PostToolUse 'npm install')")"
+  assert_jq "T2 node_modules: SubQuery marker $_sq -> red" "$OUT" \
+    '.verdict=="red" and (.findings|map(.title)|any(contains("NPM SUPPLY-CHAIN MALWARE")))'
+done
+
+_mktemp_case
+mkdir -p "$CASE_CWD/node_modules/tool/lib"
+printf '{"name":"x"}' > "$CASE_CWD/package.json"
+printf 'print("ok")\n' > "$CASE_CWD/node_modules/tool/lib/sync.py"
+printf 'benign\n' > "$CASE_CWD/node_modules/tool/lib/addon.node"
+printf 'const host = "143.228.157.68";\n' > "$CASE_CWD/node_modules/tool/lib/index.js"
+OUT="$(_run_engine "$(_payload PostToolUse 'npm install')")"
+assert_jq "T2 node_modules: common testmetest filenames and a neighboring IP stay clean" "$OUT" '.verdict!="red"'
+
 
 # The AWS SDK ships this endpoint; it must remain excluded from signatures.
 _mktemp_case
@@ -427,6 +459,17 @@ assert_jq "FP guard: clean compound install in a workspace stays green" "$OUT" \
 
 # shellcheck source=../scripts/malware-patterns.sh disable=SC1091
 . "$REPO_ROOT/scripts/malware-patterns.sh"
+
+_badhash=''
+for _h in "${HASH_IOC_HASHES[@]}"; do
+  [[ "$_h" =~ ^[0-9a-f]{64}$ ]] || _badhash="$_badhash $_h"
+done
+if [[ -z "$_badhash" ]]; then _ok "signatures: every payload hash is 64 lowercase hex"
+else _bad "signatures: every payload hash is 64 lowercase hex" "$_badhash"; fi
+_n=${#WORMHOOK_PERSIST_KEYS[@]}
+if [[ ${#WORMHOOK_PERSIST_TEST[@]} == "$_n" && ${#WORMHOOK_PERSIST_PATHS[@]} == "$_n" && ${#WORMHOOK_PERSIST_CONTENT_RE[@]} == "$_n" ]]; then
+  _ok "signatures: persistence tables have one row per key"
+else _bad "signatures: persistence tables have one row per key"; fi
 
 _mktemp_case
 mkdir -p "$CASE_HOME/.claude"

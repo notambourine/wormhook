@@ -416,6 +416,16 @@ means the payload has ALREADY run on this machine." \
   4. Rotate ALL credentials (npm/GitHub tokens, SSH keys, cloud + k8s creds)
   5. Audit installed @asyncapi/* versions against the Microsoft advisory list"
         ;;
+      testmetest)
+        persistence_check "TESTMETEST WORM PERSISTENCE DETECTED" \
+          "Found testmetest worm persistence: $WH_PERSIST_HIT
+The worm installs net-health-checker and pkg-runtime login units and wipes the home
+directory when its stolen GitHub token is revoked." \
+          "  1. Isolate this host and preserve the units, scripts, and ~/.local/share/runtimes.
+  2. Neutralize persistence before revoking any GitHub token; revocation triggers the wiper.
+  3. Audit repositories for .github/init.js and SessionStart hooks in .claude/settings.json.
+  4. Rebuild affected environments and rotate exposed credentials from a clean host."
+        ;;
       *)
         # A signature row without remediation text must still alert.
         persistence_check "PERSISTENCE ARTIFACT DETECTED (${WORMHOOK_PERSIST_KEYS[$_i]})" \

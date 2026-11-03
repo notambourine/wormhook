@@ -206,15 +206,17 @@ jobs:
 
       - name: Scan full history for secrets
         # Resolve fresh secret rules each run; verify the release signature before using the binary.
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Stay anonymous: the betterleaks org IP allow list rejects any token-bearing request.
         run: |
           # Unpack OUTSIDE the workspace: a 20 MB Go binary of compressed entropy is
           # exactly what a secret scanner is built to flag.
           cd "$RUNNER_TEMP"
-          TAG=$(gh release view -R betterleaks/betterleaks --json tagName -q .tagName)
-          gh release download "$TAG" -R betterleaks/betterleaks \
-            -p 'betterleaks_*_linux_x64.tar.gz' -p checksums.txt -p checksums.txt.sigstore.json
+          REPO=https://github.com/betterleaks/betterleaks
+          TAG=$(curl -fsSI "$REPO/releases/latest" | tr -d '\r' | sed -n 's#^location: .*/tag/##Ip')
+          test -n "$TAG"
+          for f in "betterleaks_${TAG#v}_linux_x64.tar.gz" checksums.txt checksums.txt.sigstore.json; do
+            curl -fsSLO "$REPO/releases/download/$TAG/$f"
+          done
           # NEVER pipe cosign: `run:` is `bash -e` WITHOUT pipefail, so a pipe swallows
           # a verify failure and the job proceeds on an unverified binary.
           # No --new-bundle-format: deprecated in cosign 3.x, where it is the default.

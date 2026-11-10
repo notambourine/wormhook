@@ -265,6 +265,10 @@ cmd_scan() {
   if [[ -n "$logfile" ]]; then
     printf '%s  %d repos · %d green %d yellow %d red%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" \
       "$n" "$g" "$y" "$r" "$([[ "$had_global" == 1 ]] && printf ' · MACHINE-PERSISTENCE')" >> "$logfile"
+    for ((i=0; i<${#P_GLYPH[@]}; i++)); do
+      [[ "${P_GLYPH[$i]}" == "🟢" ]] && continue
+      printf '    %s %s  %s\n' "${P_GLYPH[$i]}" "${P_DISP[$i]}" "${P_TAIL[$i]}" >> "$logfile"
+    done
   fi
   if [[ "$notify" == 1 && "$any_finding" == 1 ]]; then
     _notify "wormhook: $r critical, $y degraded" "$([[ "$had_global" == 1 ]] && printf 'MACHINE PERSISTENCE + ')$n repos scanned"

@@ -791,6 +791,21 @@ assert_jq "CLI fleet: global degradation survives clean repo scan" "$OUT" \
 if [[ "$RC" == 2 ]]; then _ok "CLI fleet: global degradation returns 2"
 else _bad "CLI fleet: global degradation returns 2" "rc=$RC"; fi
 
+cat > "$CASE_DIR/broken/wormhook.sh" <<'SH'
+#!/bin/bash
+cwd=$(jq -r .cwd)
+if [[ "$cwd" == "$WH_TEST_REPO" ]]; then
+  printf '%s\n' '{"verdict":"yellow","systemMessage":"🟡 [wormhook] repo scan incomplete"}'
+else
+  printf '%s\n' '{"verdict":"green"}'
+fi
+SH
+LOG="$CASE_DIR/sweep.log"
+HOME="$CASE_HOME" XDG_CACHE_HOME="$CASE_CACHE" WH_TEST_REPO="$CASE_CWD" \
+  bash "$CASE_DIR/broken/wormhook-scan.sh" --literal --quiet-if-clean --log "$LOG" "$CASE_CWD" >/dev/null 2>&1
+if grep -Fq "🟡 ${CASE_CWD/#$CASE_HOME/~}  repo scan incomplete" "$LOG"; then _ok "CLI fleet: log names degraded repos"
+else _bad "CLI fleet: log names degraded repos" "log=$(cat "$LOG")"; fi
+
 _mktemp_case
 mkdir -p "$CASE_DIR/empty" "$CASE_DIR/broken"
 PATH="$CASE_DIR/empty" /bin/bash "$SCAN_CLI" check >/dev/null 2>&1; RC=$?

@@ -131,6 +131,9 @@ _use_root() {  # $1 = target dir -> WH_ROOT, NODE_MODULES, MARKER
   NODE_MODULES="$1/node_modules"
   MARKER="$CACHE_DIR/$(printf '%s' "$1" | shasum -a 256 | awk '{print $1}')"
 }
+# Interactive hooks keep the short bound; the background sweep raises it so a cold tree finishes.
+T2_TIMEOUT="${WORMHOOK_T2_TIMEOUT:-20}"
+[[ "$T2_TIMEOUT" =~ ^[0-9]+$ && "$T2_TIMEOUT" -ge 1 ]] || T2_TIMEOUT=20
 _tree_mtime() {
   # Tools rewrite these on every run, so counting them rescans per command; the TTL bounds the gap.
   local statv=(stat -c %Y)
@@ -160,6 +163,22 @@ deps_changed() {
   local saved current; read -r saved < "$MARKER"
   current=$(_scan_key) || return 0
   [[ "$saved" == "$current" ]] && return 1 || return 0
+}
+
+# Change time, not modification time: a payload can reset mtime after an overwrite.
+T2_FILES=() T2_FILES_MAX=1000
+_changed_files() {  # fills T2_FILES; 1 => walk failed, too many files, or an unsplittable name
+  local out path
+  T2_FILES=()
+  [[ -f "$MARKER.seen" ]] || return 1
+  # A find without -newercm skips the check instead of forcing a full scan every sweep.
+  find "$MARKER.seen" -newercm "$MARKER.seen" &>/dev/null || return 0
+  out=$(_wh_run "$T2_TIMEOUT" find "$NODE_MODULES" -type f -newercm "$MARKER.seen" 2>/dev/null) || return 1
+  while IFS= read -r path; do
+    [[ -z "$path" ]] && continue
+    [[ -f "$path" && "${#T2_FILES[@]}" -lt "$T2_FILES_MAX" ]] || { T2_FILES=(); return 1; }
+    T2_FILES+=("$path")
+  done <<<"$out"
 }
 
 MODE=session_start
@@ -785,11 +804,19 @@ BODY
   fi
 fi
 
-# Interactive hooks keep the short bound; the background sweep raises it so a cold tree finishes.
-T2_TIMEOUT="${WORMHOOK_T2_TIMEOUT:-20}"
-[[ "$T2_TIMEOUT" =~ ^[0-9]+$ && "$T2_TIMEOUT" -ge 1 ]] || T2_TIMEOUT=20
 _dependency_content_scan() {
-  if _rg_ok "$1"; then
+  local js=() f
+  if [[ "${#T2_FILES[@]}" -gt 0 ]]; then
+    for f in "${T2_FILES[@]}"; do
+      case "$f" in *.js|*.mjs|*.cjs) js+=("$f") ;; esac
+    done
+    [[ "${#js[@]}" -gt 0 ]] || return 1
+    if _rg_ok "$1"; then
+      _wh_run "$T2_TIMEOUT" "$RG_BIN" -la --max-count=1 --no-ignore --hidden -e "$1" -- "${js[@]}" 2>/dev/null
+    else
+      _wh_run "$T2_TIMEOUT" grep -lEm1 -e "$1" -- "${js[@]}" 2>/dev/null
+    fi
+  elif _rg_ok "$1"; then
     _wh_run "$T2_TIMEOUT" "$RG_BIN" -la --max-count=1 --no-ignore --hidden \
       -g '*.{js,mjs,cjs}' -e "$1" "$NODE_MODULES" 2>/dev/null
   else
@@ -804,8 +831,12 @@ _scan_deps() {  # scans $NODE_MODULES
     if [[ $first == 1 ]]; then find_expr+=( -name "$n" ); first=0; else find_expr+=( -o -name "$n" ); fi
   done
   # Capture output directly so the timeout status survives.
-  ioc_paths=$(_wh_run "$T2_TIMEOUT" find "$NODE_MODULES" \( "${find_expr[@]}" \) -type f 2>/dev/null)
-  ioc_rc=$?
+  if [[ "${#T2_FILES[@]}" -gt 0 ]]; then
+    ioc_paths=$(printf '%s\n' "${T2_FILES[@]}"); ioc_rc=0
+  else
+    ioc_paths=$(_wh_run "$T2_TIMEOUT" find "$NODE_MODULES" \( "${find_expr[@]}" \) -type f 2>/dev/null)
+    ioc_rc=$?
+  fi
   [[ "$ioc_rc" -eq 0 ]] || warn "node_modules IOC-filename walk $(_cov "$ioc_rc") (coverage incomplete)"
   while IFS= read -r path; do
     [[ -z "$path" ]] && continue
@@ -890,22 +921,37 @@ BODY
 }
 
 # A command aimed at another directory installs or runs that directory's dependencies.
-T2_SCANNED=0 T2_CACHED=0
+# Stamp before a scan starts so a write that lands mid-scan is seen next time.
+_stamp() { _pend=$(mktemp "${TMPDIR:-/tmp}/wormhook-seen.XXXXXX" 2>/dev/null) || { _pend=""; return 1; }; }
+trap 'rm -f "${_pend:-}"' EXIT
+T2_SCANNED=0 T2_CACHED=0 T2_PARTIAL=0
 if [[ -n "$T2" ]]; then
   for _t in "${TARGET_DIRS[@]}"; do
     _use_root "$_t"
     [[ -d "$NODE_MODULES" ]] || continue
-    if [[ "$T2" == changed ]] && ! deps_changed; then T2_CACHED=1; continue; fi
-    T2_SCANNED=1
+    T2_FILES=()
+    if [[ "$T2" == changed ]] && ! deps_changed; then
+      [[ "${WORMHOOK_T2_FILES:-}" == 1 ]] || { T2_CACHED=1; continue; }
+      _stamp || { T2_CACHED=1; continue; }
+      if _changed_files && [[ "${#T2_FILES[@]}" -eq 0 ]]; then
+        mv -f "$_pend" "$MARKER.seen"; T2_CACHED=1; continue
+      fi
+    else
+      _stamp
+    fi
+    T2_SCANNED=1; T2_PARTIAL="${#T2_FILES[@]}"
     # Warnings raised outside the dependency scan say nothing about this tree.
     _w0="$WARNINGS"
     _scan_deps
-    [[ -z "$ALERTS" && "$WARNINGS" == "$_w0" ]] || continue
-    if cache_key=$(_scan_key); then
-      mkdir -p "$CACHE_DIR" && printf '%s\n' "$cache_key" > "$MARKER"
+    [[ -z "$ALERTS" && "$WARNINGS" == "$_w0" ]] || { rm -f "$_pend"; continue; }
+    if [[ "$T2_PARTIAL" -gt 0 ]]; then
+      mv -f "$_pend" "$MARKER.seen" 2>/dev/null
+    elif cache_key=$(_scan_key); then
+      mkdir -p "$CACHE_DIR" && printf '%s\n' "$cache_key" > "$MARKER" && mv -f "$_pend" "$MARKER.seen" 2>/dev/null
     else
       warn "dependency cache fingerprint failed or timed out (cache not refreshed)"
     fi
+    rm -f "$_pend"
   done
 fi
 
@@ -928,7 +974,9 @@ fi
 if [[ -z "$ALERTS" ]]; then
   SCOPE="persistence"
   [[ "$RUN_T1" == 1 ]] && SCOPE+=" + source"
-  if [[ "$T2_SCANNED" == 1 ]]; then
+  if [[ "$T2_SCANNED" == 1 && "$T2_PARTIAL" -gt 0 ]]; then
+    SCOPE+=" + node_modules ($T2_PARTIAL changed files)"
+  elif [[ "$T2_SCANNED" == 1 ]]; then
     SCOPE+=" + node_modules"
   elif [[ "$T2_CACHED" == 1 ]]; then
     SCOPE+=" + node_modules (cached, deps unchanged)"

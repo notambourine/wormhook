@@ -107,8 +107,8 @@ _collect_targets() {  # $1=base
 }
 
 cmd_scan() {
-  # A sweep has no one waiting on it, so let a cold dependency tree finish.
-  export WORMHOOK_T2_TIMEOUT="${WORMHOOK_T2_TIMEOUT:-600}"
+  # A sweep has no one waiting on it: let a cold tree finish and afford the per-file walk.
+  export WORMHOOK_T2_TIMEOUT="${WORMHOOK_T2_TIMEOUT:-600}" WORMHOOK_T2_FILES="${WORMHOOK_T2_FILES:-1}"
   local mode=fast quiet=0 notify=0 json=0 persistence=0 literal=0 logfile=""
   BASES=()
   while [[ $# -gt 0 ]]; do

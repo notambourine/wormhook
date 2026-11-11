@@ -132,11 +132,11 @@ _use_root() {  # $1 = target dir -> WH_ROOT, NODE_MODULES, MARKER
   MARKER="$CACHE_DIR/$(printf '%s' "$1" | shasum -a 256 | awk '{print $1}')"
 }
 _tree_mtime() {
-  # Changes inside .cache and .vite remain invisible to the cache until its TTL expires.
+  # Tools rewrite these on every run, so counting them rescans per command; the TTL bounds the gap.
   local statv=(stat -c %Y)
   stat -f %m "$NODE_MODULES" &>/dev/null && statv=(stat -f %m)
   local m
-  m=$(_wh_run 5 find "$NODE_MODULES" -maxdepth 2 \( -name .cache -o -name .vite \) -prune -o -type d -exec "${statv[@]}" {} + 2>/dev/null | sort -rn | sed -n '1p') || return 1
+  m=$(_wh_run 5 find "$NODE_MODULES" -maxdepth 2 \( -name .cache -o -name .vite -o -name .vite-temp -o -name .tmp -o -name .pnpm-task-run-state-v1 \) -prune -o -type d -exec "${statv[@]}" {} + 2>/dev/null | sort -rn | sed -n '1p') || return 1
   printf '%s' "${m:-0}"
 }
 _scan_key() {

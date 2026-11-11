@@ -326,7 +326,8 @@ else
 fi
 
 _mktemp_case
-mkdir -p "$CASE_CWD/node_modules/leftpad"
+mkdir -p "$CASE_CWD/node_modules/leftpad" "$CASE_CWD/node_modules/.pnpm-task-run-state-v1" \
+  "$CASE_CWD/node_modules/.vite-temp" "$CASE_CWD/node_modules/.tmp"
 printf '{"name":"t","version":"1.0.0"}' > "$CASE_CWD/package.json"
 printf '{"lockfileVersion":3,"packages":{}}' > "$CASE_CWD/package-lock.json"
 printf 'module.exports=function(){return 1}\n' > "$CASE_CWD/node_modules/leftpad/index.js"
@@ -342,6 +343,13 @@ fi
 
 OUT="$(_run_engine "$(_payload SessionStart)")"
 assert_jq "T2 cache: fresh marker + unchanged key -> SessionStart reuses cache" "$OUT" \
+  '.verdict=="green" and (.systemMessage|contains("cached, deps unchanged"))'
+
+for d in .pnpm-task-run-state-v1 .vite-temp .tmp; do
+  touch -t 203001010000 "$CASE_CWD/node_modules/$d"
+done
+OUT="$(_run_engine "$(_payload SessionStart)")"
+assert_jq "T2 cache: tool run-state writes do not invalidate the cache" "$OUT" \
   '.verdict=="green" and (.systemMessage|contains("cached, deps unchanged"))'
 
 printf '%s\n' "$MAL_DECODE_EVAL" > "$CASE_CWD/node_modules/leftpad/index.js"

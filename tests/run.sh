@@ -945,6 +945,9 @@ done
 HOME="$CASE_HOME" XDG_CACHE_HOME="$CASE_CACHE" /bin/bash "$SCAN_CLI" check "$CASE_CWD" --deep >/dev/null 2>&1
 if [[ $? == 2 ]]; then _ok "CLI: ambiguous dependency returns review-needed exit 2"
 else _bad "CLI: ambiguous dependency returns review-needed exit 2"; fi
+HOME="$CASE_HOME" XDG_CACHE_HOME="$CASE_CACHE" /bin/bash "$SCAN_CLI" check "$CASE_CWD" --no-deps >/dev/null 2>&1
+if [[ $? == 0 ]]; then _ok "CLI: check --no-deps skips the dependency tree"
+else _bad "CLI: check --no-deps skips the dependency tree"; fi
 
 _mktemp_case
 mkdir -p "$CASE_DIR/bin" "$CASE_CWD/node_modules/lib"

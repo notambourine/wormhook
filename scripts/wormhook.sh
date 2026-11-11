@@ -225,6 +225,7 @@ case "$EVENT" in
   *)
     MODE=session_start; RUN_T1=1; T2=changed
     [[ "${WORMHOOK_DEEP:-}" == 1 ]] && T2=always
+    [[ "${WORMHOOK_NO_DEPS:-}" == 1 ]] && T2=""
     ;;
 esac
 

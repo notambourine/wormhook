@@ -34,15 +34,16 @@ PATHFILE="${XDG_CONFIG_HOME:-$HOME/.config}/wormhook/install-path"
 SAMPLE="$SCRIPT_DIR/wormhook-scan.conf.sample"
 SWEEP_LOG="${WORMHOOK_LOG:-$HOME/Library/Logs/wormhook-sweep.log}"
 
-_scan_one() {  # $1=dir  $2=fast|deep
+_scan_one() {  # $1=dir  $2=fast|deep|nodeps
   local dir="$1" mode="$2" payload
   dir=$(cd "$dir" 2>/dev/null && pwd -P) || {
     jq -nc --arg d "$1" '{verdict:"yellow",systemMessage:("🟡 [wormhook-scan] cannot scan directory: " + $d)}'
     return "$EXIT_DEGRADED"
   }
-  local deep=""; [[ "$mode" == deep ]] && deep=1
+  local deep="" nodeps=""
+  case "$mode" in deep) deep=1 ;; nodeps) nodeps=1 ;; esac
   payload=$(jq -nc --arg c "$dir" '{cwd:$c,hook_event_name:"SessionStart"}')
-  printf '%s' "$payload" | WORMHOOK_DEEP="$deep" bash "$ENGINE" 2>/dev/null
+  printf '%s' "$payload" | WORMHOOK_DEEP="$deep" WORMHOOK_NO_DEPS="$nodeps" bash "$ENGINE" 2>/dev/null
 }
 _glyph() {  # stdin: engine JSON -> 🟢/🟡/🚨
   local g
@@ -532,7 +533,7 @@ wormhook-scan — run the wormhook supply-chain scanner outside Claude Code.
 
 USAGE
   wormhook-scan [PATHS...] [--deep|--fast] [--persistence] [--literal] [--quarantine] [-q] [--notify] [--log F] [--json]
-  wormhook-scan check [DIR] [-q] [--quarantine]   # one-repo verdict (exec-guard primitive)
+  wormhook-scan check [DIR] [-q] [--no-deps] [--quarantine]   # one-repo verdict; --no-deps skips node_modules
   wormhook-scan shell-init                # print opt-in npm/pnpm/yarn/bun/npx exec-guard
   wormhook-scan git-hook                  # used by installed git hooks (🟢 line clean, loud banner on finding)
   wormhook-scan install-cli
@@ -599,6 +600,7 @@ cmd_check() {
       -q|--quiet-if-clean) quiet=1 ;;
       --deep) mode=deep ;;
       --fast) mode=fast ;;
+      --no-deps) mode=nodeps ;;
       --quarantine) export WORMHOOK_QUARANTINE=1 ;;
       -*) _die "unknown check flag: $a" 2 ;;
       *) [[ -d "$a" ]] || _die "not a directory: $a" 2; dir="$a" ;;

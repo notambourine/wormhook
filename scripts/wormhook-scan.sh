@@ -533,7 +533,7 @@ wormhook-scan — run the wormhook supply-chain scanner outside Claude Code.
 
 USAGE
   wormhook-scan [PATHS...] [--deep|--fast] [--persistence] [--literal] [--quarantine] [-q] [--notify] [--log F] [--json]
-  wormhook-scan check [DIR] [-q] [--no-deps] [--quarantine]   # one-repo verdict; --no-deps skips node_modules
+  wormhook-scan check [DIR] [-q] [--deps] [--quarantine]   # one-repo verdict; --deps adds node_modules
   wormhook-scan shell-init                # print opt-in npm/pnpm/yarn/bun/npx exec-guard
   wormhook-scan git-hook                  # used by installed git hooks (🟢 line clean, loud banner on finding)
   wormhook-scan install-cli
@@ -594,13 +594,13 @@ cmd_git_hook() {
 }
 
 cmd_check() {
-  local dir="$PWD" mode=fast quiet=0 a
+  local dir="$PWD" mode=nodeps quiet=0 a
   for a in "$@"; do
     case "$a" in
       -q|--quiet-if-clean) quiet=1 ;;
       --deep) mode=deep ;;
       --fast) mode=fast ;;
-      --no-deps) mode=nodeps ;;
+      --deps) mode=fast ;;
       --quarantine) export WORMHOOK_QUARANTINE=1 ;;
       -*) _die "unknown check flag: $a" 2 ;;
       *) [[ -d "$a" ]] || _die "not a directory: $a" 2; dir="$a" ;;
@@ -629,7 +629,7 @@ __wormhook_guard() {
   # Exit codes: 0 clean · 1 critical (IOC) · 2 degraded. Block ONLY on 1 — a degraded
   # scan (missing dep, timeout, unparseable verdict) must FAIL OPEN, not brick npm with
   # a false "IOC" message. The engine is fail-open by design; the guard must match.
-  wormhook-scan check "$PWD" -q; local rc=$?
+  wormhook-scan check "$PWD" -q --deps; local rc=$?
   [ "$rc" -eq 1 ] || return 0
   printf '\033[1;31m⛔ wormhook blocked this command: supply-chain IOC in %s\n   run `wormhook-scan .` for detail; clear it before re-running.\033[0m\n' "$PWD" >&2
   return 1

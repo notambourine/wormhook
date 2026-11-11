@@ -34,15 +34,16 @@ PATHFILE="${XDG_CONFIG_HOME:-$HOME/.config}/wormhook/install-path"
 SAMPLE="$SCRIPT_DIR/wormhook-scan.conf.sample"
 SWEEP_LOG="${WORMHOOK_LOG:-$HOME/Library/Logs/wormhook-sweep.log}"
 
-_scan_one() {  # $1=dir  $2=fast|deep
+_scan_one() {  # $1=dir  $2=fast|deep|nodeps
   local dir="$1" mode="$2" payload
   dir=$(cd "$dir" 2>/dev/null && pwd -P) || {
     jq -nc --arg d "$1" '{verdict:"yellow",systemMessage:("🟡 [wormhook-scan] cannot scan directory: " + $d)}'
     return "$EXIT_DEGRADED"
   }
-  local deep=""; [[ "$mode" == deep ]] && deep=1
+  local deep="" nodeps=""
+  case "$mode" in deep) deep=1 ;; nodeps) nodeps=1 ;; esac
   payload=$(jq -nc --arg c "$dir" '{cwd:$c,hook_event_name:"SessionStart"}')
-  printf '%s' "$payload" | WORMHOOK_DEEP="$deep" bash "$ENGINE" 2>/dev/null
+  printf '%s' "$payload" | WORMHOOK_DEEP="$deep" WORMHOOK_NO_DEPS="$nodeps" bash "$ENGINE" 2>/dev/null
 }
 _glyph() {  # stdin: engine JSON -> 🟢/🟡/🚨
   local g
@@ -109,12 +110,13 @@ _collect_targets() {  # $1=base
 cmd_scan() {
   # A sweep has no one waiting on it: let a cold tree finish and afford the per-file walk.
   export WORMHOOK_T2_TIMEOUT="${WORMHOOK_T2_TIMEOUT:-600}" WORMHOOK_T2_FILES="${WORMHOOK_T2_FILES:-1}"
-  local mode=fast quiet=0 notify=0 json=0 persistence=0 literal=0 logfile=""
+  local mode=nodeps quiet=0 notify=0 json=0 persistence=0 literal=0 logfile=""
   BASES=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --deep) mode=deep ;;
-      --fast) mode=fast ;;
+      --deps) mode=fast ;;
+      --fast) mode=nodeps ;;
       --persistence) persistence=1 ;;
       --literal) literal=1 ;;
       --quarantine) export WORMHOOK_QUARANTINE=1 ;;
@@ -325,13 +327,14 @@ cmd_install_cli() {
 
 _xml() { local s="$1"; s="${s//&/&amp;}"; s="${s//</&lt;}"; s="${s//>/&gt;}"; printf '%s' "$s"; }
 cmd_install_launchd() {
-  local every=3600 paths=() bin noload=0 quarantine=0
+  local every=3600 paths=() bin noload=0 quarantine=0 deps=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --every) shift; every="${1:-3600}" ;;
       --every=*) every="${1#--every=}" ;;
       --no-load) noload=1 ;;
       --quarantine) quarantine=1 ;;
+      --deps) deps=(--deps) ;;
       *) [[ -d "$1" ]] && paths+=("$1") || echo "skipping non-dir: $1" >&2 ;;
     esac
     shift
@@ -342,14 +345,15 @@ cmd_install_launchd() {
 wormhook-scan: launchd is macOS-only. On Linux, add a systemd user timer or cron line:
 
   # crontab -e
-  @hourly $SELF scan --fast --quiet-if-clean --notify --log "$SWEEP_LOG"
+  @hourly $SELF scan --deps --quiet-if-clean --notify --log "$SWEEP_LOG"
 TXT
     return 0
   fi
   command -v wormhook-scan >/dev/null 2>&1 && bin="$(command -v wormhook-scan)" || bin="$SELF"
   local plist="$HOME/Library/LaunchAgents/$LABEL.plist"
   mkdir -p "$HOME/Library/LaunchAgents" "$(dirname "$SWEEP_LOG")"
-  local args=("$bin" scan --fast --quiet-if-clean --notify --log "$SWEEP_LOG")
+  local args=("$bin" scan --quiet-if-clean --notify --log "$SWEEP_LOG")
+  [[ ${#deps[@]} -gt 0 ]] && args+=("${deps[@]}")
   # Bash 3.2 rejects empty array expansion under set -u.
   [[ ${#paths[@]} -gt 0 ]] && args+=("${paths[@]}")
   # Reloading an unchanged plist triggers another macOS background-item alert.
@@ -531,12 +535,12 @@ cmd_help() {
 wormhook-scan — run the wormhook supply-chain scanner outside Claude Code.
 
 USAGE
-  wormhook-scan [PATHS...] [--deep|--fast] [--persistence] [--literal] [--quarantine] [-q] [--notify] [--log F] [--json]
-  wormhook-scan check [DIR] [-q] [--quarantine]   # one-repo verdict (exec-guard primitive)
+  wormhook-scan [PATHS...] [--deps|--deep] [--persistence] [--literal] [--quarantine] [-q] [--notify] [--log F] [--json]
+  wormhook-scan check [DIR] [-q] [--deps] [--quarantine]   # one-repo verdict; --deps adds node_modules
   wormhook-scan shell-init                # print opt-in npm/pnpm/yarn/bun/npx exec-guard
   wormhook-scan git-hook                  # used by installed git hooks (🟢 line clean, loud banner on finding)
   wormhook-scan install-cli
-  wormhook-scan install-launchd [--every SECONDS] [--no-load] [--quarantine] [PATHS...]
+  wormhook-scan install-launchd [--every SECONDS] [--no-load] [--quarantine] [--deps] [PATHS...]
   wormhook-scan install-git-hook
   wormhook-scan uninstall-launchd | uninstall-git-hook
   wormhook-scan status
@@ -549,8 +553,9 @@ USAGE
 SCAN
   PATHS are repos, org dirs of repos, or any dir; each resolves to the git repo(s)
   at/under it (node_modules pruned). No PATHS -> \$WORMHOOK_SCAN_ROOTS or $CONFIG.
-  --fast (default)  Tier 0+1 (+Tier 2 only if deps drifted) — ~26ms/repo.
-  --deep            force the Tier-2 node_modules walk.
+  (default)         persistence + source; no node_modules.
+  --deps            add node_modules when its fingerprint changed or its cache expired.
+  --deep            add node_modules and force the scan.
   --persistence     only the machine-wide (\$HOME) persistence checks.
   --literal         scan exactly the given dirs (skip git-repo discovery).
   --quarantine      opt-in containment (WORMHOOK_QUARANTINE=1): rename + chmod 000
@@ -579,7 +584,7 @@ cmd_git_hook() {
       git -C "$repo" rev-parse -q --verify ORIG_HEAD >/dev/null 2>&1 && \
         changed=$(git -C "$repo" diff --stat=100 --stat-count="$CHANGED_MAX" ORIG_HEAD HEAD 2>/dev/null) ;;
   esac
-  out=$(_scan_one "$repo" fast); glyph=$(printf '%s' "$out" | _glyph)
+  out=$(_scan_one "$repo" nodeps); glyph=$(printf '%s' "$out" | _glyph)
   if [[ "$glyph" == "🚨" ]]; then
     printf '\033[1;31m⛔ wormhook: SUPPLY-CHAIN IOC after a git update — %s\033[0m\n' "${repo/#$HOME/~}"
     [[ -n "${changed:-}" ]] && printf '📋 this update changed:\n%s\n' "$changed"
@@ -593,12 +598,13 @@ cmd_git_hook() {
 }
 
 cmd_check() {
-  local dir="$PWD" mode=fast quiet=0 a
+  local dir="$PWD" mode=nodeps quiet=0 a
   for a in "$@"; do
     case "$a" in
       -q|--quiet-if-clean) quiet=1 ;;
       --deep) mode=deep ;;
-      --fast) mode=fast ;;
+      --fast) mode=nodeps ;;
+      --deps) mode=fast ;;
       --quarantine) export WORMHOOK_QUARANTINE=1 ;;
       -*) _die "unknown check flag: $a" 2 ;;
       *) [[ -d "$a" ]] || _die "not a directory: $a" 2; dir="$a" ;;
@@ -627,7 +633,7 @@ __wormhook_guard() {
   # Exit codes: 0 clean · 1 critical (IOC) · 2 degraded. Block ONLY on 1 — a degraded
   # scan (missing dep, timeout, unparseable verdict) must FAIL OPEN, not brick npm with
   # a false "IOC" message. The engine is fail-open by design; the guard must match.
-  wormhook-scan check "$PWD" -q; local rc=$?
+  wormhook-scan check "$PWD" -q --deps; local rc=$?
   [ "$rc" -eq 1 ] || return 0
   printf '\033[1;31m⛔ wormhook blocked this command: supply-chain IOC in %s\n   run `wormhook-scan .` for detail; clear it before re-running.\033[0m\n' "$PWD" >&2
   return 1

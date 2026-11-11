@@ -358,6 +358,31 @@ OUT="$(_run_engine "$(_payload SessionStart)")"
 assert_jq "T2 cache TTL: expired marker re-walks and catches in-place overwrite" "$OUT" \
   '.verdict=="red" and (.findings|map(.title)|any(contains("NPM SUPPLY-CHAIN MALWARE")))'
 
+_mktemp_case
+mkdir -p "$CASE_CWD/node_modules/.pnpm/a@1/node_modules/a/lib" "$CASE_CWD/node_modules/.vite"
+printf '{"lockfileVersion":3,"packages":{}}' > "$CASE_CWD/package-lock.json"
+DEEP_FILE="$CASE_CWD/node_modules/.pnpm/a@1/node_modules/a/lib/index.js"
+printf 'module.exports=1;\n' > "$DEEP_FILE"
+_run_engine "$(_payload PostToolUse 'npm install')" >/dev/null
+_sweep_engine() { printf '%s' "$(_payload SessionStart)" | HOME="$CASE_HOME" XDG_CACHE_HOME="$CASE_CACHE" WORMHOOK_T2_FILES=1 bash "$ENGINE" 2>/dev/null; }
+OUT="$(_sweep_engine)"
+assert_jq "T2 files: no file changed since the last scan -> cache holds" "$OUT" \
+  '.verdict=="green" and (.systemMessage|contains("cached, deps unchanged"))'
+printf 'module.exports=2;\n' > "$CASE_CWD/node_modules/.vite/dep.js"
+OUT="$(_sweep_engine)"
+assert_jq "T2 files: a clean changed file is scanned alone" "$OUT" \
+  '.verdict=="green" and (.systemMessage|contains("1 changed files"))'
+printf '%s\n' "$MAL_DECODE_EVAL" > "$DEEP_FILE"
+touch -t 202001010000 "$DEEP_FILE"
+OUT="$(_run_engine "$(_payload SessionStart)")"
+assert_jq "T2 files: hooks skip the per-file walk" "$OUT" \
+  '.verdict=="green" and (.systemMessage|contains("cached, deps unchanged"))'
+OUT="$(_sweep_engine)"
+assert_jq "T2 files: deep in-place overwrite with a reset mtime -> red" "$OUT" \
+  '.verdict=="red" and (.findings|map(.title)|any(contains("NPM SUPPLY-CHAIN MALWARE")))'
+OUT="$(_sweep_engine)"
+assert_jq "T2 files: a finding does not advance the stamp" "$OUT" '.verdict=="red"'
+
 
 if command -v git >/dev/null 2>&1; then
   _mktemp_case

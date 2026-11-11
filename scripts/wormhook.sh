@@ -804,6 +804,9 @@ BODY
   fi
 fi
 
+# Interactive hooks keep the short bound; the background sweep raises it so a cold tree finishes.
+T2_TIMEOUT="${WORMHOOK_T2_TIMEOUT:-20}"
+[[ "$T2_TIMEOUT" =~ ^[0-9]+$ && "$T2_TIMEOUT" -ge 1 ]] || T2_TIMEOUT=20
 _dependency_content_scan() {
   local js=() f
   if [[ "${#T2_FILES[@]}" -gt 0 ]]; then

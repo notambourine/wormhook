@@ -951,6 +951,12 @@ else _bad "CLI: check skips the dependency tree by default"; fi
 HOME="$CASE_HOME" XDG_CACHE_HOME="$CASE_CACHE" /bin/bash "$SCAN_CLI" check "$CASE_CWD" --deps >/dev/null 2>&1
 if [[ $? == 2 ]]; then _ok "CLI: check --deps scans the dependency tree"
 else _bad "CLI: check --deps scans the dependency tree"; fi
+HOME="$CASE_HOME" XDG_CACHE_HOME="$CASE_CACHE" /bin/bash "$SCAN_CLI" scan --literal -q "$CASE_CWD" >/dev/null 2>&1
+if [[ $? == 0 ]]; then _ok "CLI: a sweep skips the dependency tree by default"
+else _bad "CLI: a sweep skips the dependency tree by default"; fi
+HOME="$CASE_HOME" XDG_CACHE_HOME="$CASE_CACHE" /bin/bash "$SCAN_CLI" scan --literal --deps -q "$CASE_CWD" >/dev/null 2>&1
+if [[ $? == 2 ]]; then _ok "CLI: a sweep with --deps scans the dependency tree"
+else _bad "CLI: a sweep with --deps scans the dependency tree"; fi
 
 _mktemp_case
 mkdir -p "$CASE_DIR/bin" "$CASE_CWD/node_modules/lib"

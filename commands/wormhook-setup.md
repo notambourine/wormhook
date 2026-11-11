@@ -52,8 +52,8 @@ roots (`~/code`, `~/sandbox/git-repos`, `~/work`) plus "Other" for a custom path
   as its own line to the config file shown by `status` (e.g. `~/code/*/`). Confirm the path.
 - **CLI**: `bash "$SCRIPT" install-cli`. Note if `~/.local/bin` is not on their `$PATH`.
 - **Git-pull audit**: `bash "$SCRIPT" install-git-hook`.
-- **Hourly sweep**: `bash "$SCRIPT" install-launchd`. Mention `--every SECONDS` to retune, and
-  append `--quarantine` only if they opted in.
+- **Hourly sweep**: `bash "$SCRIPT" install-launchd --deps`, so the sweep covers `node_modules`.
+  Mention `--every SECONDS` to retune, and append `--quarantine` only if they opted in.
 
 ## 4. Confirm
 

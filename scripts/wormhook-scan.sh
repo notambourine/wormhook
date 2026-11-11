@@ -107,6 +107,8 @@ _collect_targets() {  # $1=base
 }
 
 cmd_scan() {
+  # A sweep has no one waiting on it, so let a cold dependency tree finish.
+  export WORMHOOK_T2_TIMEOUT="${WORMHOOK_T2_TIMEOUT:-600}"
   local mode=fast quiet=0 notify=0 json=0 persistence=0 literal=0 logfile=""
   BASES=()
   while [[ $# -gt 0 ]]; do

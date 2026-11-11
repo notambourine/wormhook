@@ -33,21 +33,28 @@ EVENT=$(echo "$PAYLOAD" | jq -r '.hook_event_name // ""')
 # Older hook configs omit the event name.
 [[ -z "$EVENT" ]] && { [[ -n "$COMMAND" ]] && EVENT="PreToolUse" || EVENT="SessionStart"; }
 
-# Keep hooks.json filters broader than these regexes or valid commands will skip scanning.
-GATE_RE='^\s*(npm (ci|install|i|it|install-test|add|update|up|upgrade|rebuild|run|start|test|t|exec|x)|pnpm (install|i|add|update|up|rebuild|run|exec|dlx)|yarn( (install|add|run))?|bun (install|add|i|update|run|x)|npx|bunx|pnpx|node)(\s|$)'
+# Gate on the binary, not the verb: every subcommand can run project or dependency code.
+GATE_RE='^(npm|pnpm|yarn|bun|npx|bunx|pnpx|node|deno|tsx|ts-node)(\s|$)'
+# Options, with or without a value, may precede the verb.
+WH_F='(-[^[:space:]]+ ([^-[:space:]][^[:space:]]* )?)*'
 # Bare yarn installs, but `yarn <script>` runs a script; only flags may follow a bare install.
-INSTALL_RE='^\s*(npm (ci|install|i|it|install-test|add|update|up|upgrade|rebuild)|pnpm (install|i|add|update|up|rebuild)|yarn( (install|add|up|upgrade)|( -[^[:space:]]+)+|$)|bun (install|add|i|update))(\s|$)'
+INSTALL_RE="^(npm ${WH_F}(ci|install|i|it|install-test|add|update|up|upgrade|rebuild)|pnpm ${WH_F}(install|i|add|update|up|rebuild)|yarn( ${WH_F}(install|add|up|upgrade)|( -[^[:space:]]+)+|\$)|bun ${WH_F}(install|add|i|update))(\\s|\$)"
 # Scan after git writes the new files.
-GIT_RE='^\s*git\s+(-C\s+\S+\s+)?(pull|merge|checkout|switch|rebase)(\s|$)'
+GIT_RE='^git\s+(-C\s+\S+\s+)?(pull|merge|checkout|switch|rebase)(\s|$)'
 # Python loads .pth files before user code, so scan before starting the interpreter.
-PYGATE_RE='^\s*(pip|pip3|pipx|uv|python|python3)(\s|$)'
-PYINSTALL_RE='^\s*((pip|pip3|pipx)\s+install|uv\s+(add|sync|(pip\s+install)))(\s|$)'
+PYGATE_RE='^(pip|pip3|pipx|uv|uvx|python|python3|pytest)(\s|$)'
+PYINSTALL_RE='^((pip|pip3|pipx)\s+install|uv\s+(add|sync|(pip\s+install)))(\s|$)'
 
-# Splitting quoted separators may add scans; blocking still requires a finding.
+# Over-splitting quoted text may add scans; blocking still requires a finding.
+# Reduce each segment to the command it runs: drop quotes, wrappers, and binary paths.
 WH_SUBCMDS=""
 [[ -n "$COMMAND" ]] && WH_SUBCMDS=$(printf '%s\n' "$COMMAND" \
-  | awk '{ gsub(/[;&|]+/, "\n"); print }' \
-  | sed -E 's/^[[:space:]]*((env|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*)[[:space:]]+)*//')
+  | tr -d "\"'\\\\" \
+  | awk '{ gsub(/[;&|(){}`]+/, "\n"); print }' \
+  | sed -E -e 's/[[:space:]]+/ /g' -e 's/^ //' -e ':a' \
+      -e 's/^(env|sudo|command|builtin|exec|time|nohup|nice|xargs|corepack|then|do|else|elif|if|while|until|!|(ba|z|da)?sh|-[^ ]+|[A-Za-z_][A-Za-z0-9_]*=[^ ]*) //' -e 'ta' \
+      -e 's#^[^ ]*node_modules/\.bin/[^ ]+#npx#' -e 'ta' \
+      -e 's#^[^ ]*/([^ /]+)( |$)#\1\2#' -e 'ta')
 WH_DIROPT_STRIP='s/[[:space:]](--prefix|--cwd|--dir|-C)[= ][^[:space:]]+//g'
 WH_SUBCMDS_N=""
 [[ -n "$WH_SUBCMDS" ]] && WH_SUBCMDS_N=$(printf '%s\n' "$WH_SUBCMDS" | sed -E "$WH_DIROPT_STRIP")
@@ -74,7 +81,6 @@ if [[ -n "$WH_SUBCMDS" ]]; then
       cd\ *)
         _d="${_seg#cd }"; _d="${_d#"${_d%%[![:space:]]*}"}"
         _d="${_d%%[[:space:]]*}"
-        _d="${_d#[\"\']}"; _d="${_d%[\"\']}"
         [[ -n "$_d" && "$_d" != "-" ]] && _vcwd=$(_resolve_dir "$_d" "$_vcwd")
         continue ;;
     esac
@@ -489,23 +495,7 @@ if [[ ${#zw_files[@]} -gt 0 ]]; then
   zw_file=$(LC_ALL=C grep -laE "$MALWARE_ZEROWIDTH_RE" "${zw_files[@]}" 2>/dev/null | head -1)
   if [[ -n "$zw_file" ]]; then
     zw_line=$(LC_ALL=C grep -naE "$MALWARE_ZEROWIDTH_RE" "$zw_file" 2>/dev/null | head -1 | cut -d: -f1)
-    alert "HIDDEN UNICODE IN AGENT CONFIG" "$(cat <<BODY
-$zw_file carries a zero-width Unicode character at line ${zw_line:-?}.
-${COMMAND:+Command blocked: $COMMAND}
-Nothing legitimate writes one into an agent config. TrapDoor (May 2026) planted
-CLAUDE.md and .cursorrules holding instructions built from U+200B/200C/200D/2060/FEFF:
-your agent tokenizes every one of them, and your editor shows you none of them.
-An emoji ZWJ sequence, a leading byte-order mark, and Persian/Urdu/Hindi U+200C
-orthography are all exempted, so this is not one of those.
-
-Immediate steps:
-  1. Reveal them: LC_ALL=C grep -naE \$'\\xe2\\x80\\x8b|\\xe2\\x80\\x8c|\\xe2\\x80\\x8d|\\xe2\\x81\\xa0|\\xef\\xbb\\xbf' "$zw_file"
-  2. git log -p -- "$zw_file"  (find the commit that added the line)
-  3. Delete the hidden text, or the whole file if you did not author it
-  4. Assume the agent already followed it: rotate npm/GitHub tokens, SSH keys,
-     cloud + LLM API keys, and check ~/.ssh/authorized_keys and crontab -l
-BODY
-)"
+    warn "review $zw_file line ${zw_line:-?}: zero-width Unicode character; TrapDoor hides agent instructions this way, and pasted text carries them too"
   fi
 fi
 
@@ -584,6 +574,8 @@ if [[ ${#pth_files[@]} -gt 0 ]]; then
     else
       pth_m=$(grep -niE "$MALWARE_PTH_RE" "$pth" 2>/dev/null | head -1)
       [[ -n "$pth_m" ]] && pth_reason="executes code on interpreter start: $pth_m"
+      [[ -n "$pth_m" ]] || ! grep -qiE "$MALWARE_PTH_WARN_RE" "$pth" 2>/dev/null ||
+        warn "review Python startup hook $pth: runs code on interpreter start; not a confirmed malware IOC"
     fi
     [[ -z "$pth_reason" ]] && continue
     [[ "$pth_exact" == 1 ]] && _quarantine "$pth"
@@ -889,8 +881,10 @@ if [[ -n "$T2" ]]; then
     [[ -d "$NODE_MODULES" ]] || continue
     if [[ "$T2" == changed ]] && ! deps_changed; then T2_CACHED=1; continue; fi
     T2_SCANNED=1
+    # Warnings raised outside the dependency scan say nothing about this tree.
+    _w0="$WARNINGS"
     _scan_deps
-    [[ -z "$ALERTS" && -z "$WARNINGS" ]] || continue
+    [[ -z "$ALERTS" && "$WARNINGS" == "$_w0" ]] || continue
     if cache_key=$(_scan_key); then
       mkdir -p "$CACHE_DIR" && printf '%s\n' "$cache_key" > "$MARKER"
     else

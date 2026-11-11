@@ -746,6 +746,26 @@ assert_jq "base tools only: no Homebrew-only dependency degrades the scan" "$OUT
   '.verdict=="green"'
 
 _mktemp_case
+mkdir -p "$CASE_DIR/slow" "$CASE_CWD/node_modules/lib"
+printf 'module.exports=1;\n' > "$CASE_CWD/node_modules/lib/index.js"
+cat > "$CASE_DIR/slow/rg" <<'SH'
+#!/bin/bash
+for a in "$@"; do [[ "$a" == -q ]] && exit 1; done
+printf '%s\n' "${WORMHOOK_T2_TIMEOUT:-unset}" > "$WH_TEST_SEEN"
+[[ "${WORMHOOK_T2_TIMEOUT:-}" == 1 ]] && sleep 3
+exit 1
+SH
+chmod +x "$CASE_DIR/slow/rg"
+OUT="$(printf '%s' "$(_payload PostToolUse 'npm install')" | HOME="$CASE_HOME" XDG_CACHE_HOME="$CASE_CACHE" \
+  WH_TEST_SEEN="$CASE_DIR/seen" WORMHOOK_T2_TIMEOUT=1 PATH="$CASE_DIR/slow:$PATH" bash "$ENGINE" 2>/dev/null)"
+assert_jq "T2 timeout: the bound is configurable and an expiry reports incomplete coverage" "$OUT" \
+  '.verdict=="yellow" and (.systemMessage|contains("content scan timed out"))'
+HOME="$CASE_HOME" XDG_CACHE_HOME="$CASE_CACHE" WH_TEST_SEEN="$CASE_DIR/seen" PATH="$CASE_DIR/slow:$PATH" \
+  bash "$SCAN_CLI" scan --literal --deep -q "$CASE_CWD" >/dev/null 2>&1
+if [[ "$(cat "$CASE_DIR/seen" 2>/dev/null)" == 600 ]]; then _ok "T2 timeout: a sweep raises the dependency scan bound"
+else _bad "T2 timeout: a sweep raises the dependency scan bound" "saw: $(cat "$CASE_DIR/seen" 2>/dev/null)"; fi
+
+_mktemp_case
 sed -n '/^_wh_run()/,/^)/p' "$ENGINE" > "$CASE_DIR/watchdog.sh"
 printf '\nWH_TIMEOUT=\n_wh_run "$@"\n' >> "$CASE_DIR/watchdog.sh"
 OUT="$(bash "$CASE_DIR/watchdog.sh" 1 printf 'complete')"

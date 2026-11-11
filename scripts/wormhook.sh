@@ -785,12 +785,15 @@ BODY
   fi
 fi
 
+# Interactive hooks keep the short bound; the background sweep raises it so a cold tree finishes.
+T2_TIMEOUT="${WORMHOOK_T2_TIMEOUT:-20}"
+[[ "$T2_TIMEOUT" =~ ^[0-9]+$ && "$T2_TIMEOUT" -ge 1 ]] || T2_TIMEOUT=20
 _dependency_content_scan() {
   if _rg_ok "$1"; then
-    _wh_run 20 "$RG_BIN" -la --max-count=1 --no-ignore --hidden \
+    _wh_run "$T2_TIMEOUT" "$RG_BIN" -la --max-count=1 --no-ignore --hidden \
       -g '*.{js,mjs,cjs}' -e "$1" "$NODE_MODULES" 2>/dev/null
   else
-    _wh_run 20 grep -rlEm1 --include="*.js" --include="*.mjs" --include="*.cjs" "$1" "$NODE_MODULES" 2>/dev/null
+    _wh_run "$T2_TIMEOUT" grep -rlEm1 --include="*.js" --include="*.mjs" --include="*.cjs" "$1" "$NODE_MODULES" 2>/dev/null
   fi
 }
 
@@ -801,7 +804,7 @@ _scan_deps() {  # scans $NODE_MODULES
     if [[ $first == 1 ]]; then find_expr+=( -name "$n" ); first=0; else find_expr+=( -o -name "$n" ); fi
   done
   # Capture output directly so the timeout status survives.
-  ioc_paths=$(_wh_run 20 find "$NODE_MODULES" \( "${find_expr[@]}" \) -type f 2>/dev/null)
+  ioc_paths=$(_wh_run "$T2_TIMEOUT" find "$NODE_MODULES" \( "${find_expr[@]}" \) -type f 2>/dev/null)
   ioc_rc=$?
   [[ "$ioc_rc" -eq 0 ]] || warn "node_modules IOC-filename walk $(_cov "$ioc_rc") (coverage incomplete)"
   while IFS= read -r path; do

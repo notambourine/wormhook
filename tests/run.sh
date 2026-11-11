@@ -372,6 +372,18 @@ printf 'module.exports=2;\n' > "$CASE_CWD/node_modules/.vite/dep.js"
 OUT="$(_sweep_engine)"
 assert_jq "T2 files: a clean changed file is scanned alone" "$OUT" \
   '.verdict=="green" and (.systemMessage|contains("1 changed files"))'
+printf '{"lockfileVersion":3,"packages":{"x":{}}}' > "$CASE_CWD/package-lock.json"
+OUT="$(_run_engine "$(_payload SessionStart)")"
+assert_jq "T2 lock: a lockfile change without an install keeps the cache" "$OUT" \
+  '.verdict=="green" and (.systemMessage|contains("cached, deps unchanged"))'
+OUT="$(_run_engine "$(_payload SessionStart)")"
+assert_jq "T2 lock: the new lockfile is recorded" "$OUT" \
+  '.verdict=="green" and (.systemMessage|contains("cached, deps unchanged"))'
+printf '{"lockfileVersion":3,"packages":{"y":{}}}' > "$CASE_CWD/package-lock.json"
+printf 'module.exports=3;\n' > "$CASE_CWD/node_modules/.vite/dep.js"
+OUT="$(_run_engine "$(_payload SessionStart)")"
+assert_jq "T2 lock: files changed alongside the lockfile are scanned alone" "$OUT" \
+  '.verdict=="green" and (.systemMessage|contains("1 changed files"))'
 printf '%s\n' "$MAL_DECODE_EVAL" > "$DEEP_FILE"
 touch -t 202001010000 "$DEEP_FILE"
 OUT="$(_run_engine "$(_payload SessionStart)")"

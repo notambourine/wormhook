@@ -144,7 +144,8 @@ _tree_mtime() {
 }
 _scan_key() {
   local c m scanner sig=none
-  scanner=$(shasum -a 256 "$SCRIPT_DIR/wormhook.sh" "$MALWARE_PATTERNS" | shasum -a 256 | awk '{print $1}') || return 1
+  # Hash contents only: the install path carries the version and would expire caches per release.
+  scanner=$(cat "$SCRIPT_DIR/wormhook.sh" "$MALWARE_PATTERNS" | shasum -a 256 | awk '{print $1}') || return 1
   for c in package-lock.json npm-shrinkwrap.json pnpm-lock.yaml yarn.lock bun.lock bun.lockb; do
     if [[ -f "$WH_ROOT/$c" ]]; then
       sig=$(shasum -a 256 "$WH_ROOT/$c" | awk '{print $1}') || return 1
@@ -154,7 +155,9 @@ _scan_key() {
   m=$(_tree_mtime) || return 1
   printf '%s:%s:%s' "$scanner" "$sig" "$m"
 }
-deps_changed() {
+LOCK_KEY=""
+deps_changed() {  # sets LOCK_KEY when the lockfile alone differs
+  LOCK_KEY=""
   [[ -d "$NODE_MODULES" ]] || return 1
   [[ -f "$MARKER" ]] || return 0
   local ttl="${WORMHOOK_T2_TTL_HOURS:-24}"
@@ -162,7 +165,14 @@ deps_changed() {
   [[ -n "$(find "$MARKER" -mmin +"$((ttl * 60))" 2>/dev/null)" ]] && return 0
   local saved current; read -r saved < "$MARKER"
   current=$(_scan_key) || return 0
-  [[ "$saved" == "$current" ]] && return 1 || return 0
+  [[ "$saved" == "$current" ]] && return 1
+  [[ "${saved%%:*}" == "${current%%:*}" && "${saved##*:}" == "${current##*:}" ]] && LOCK_KEY="$current"
+  return 0
+}
+# Keep the marker's age: a per-file check must not extend the expiry.
+_rekey() {
+  local tmp="$MARKER.new"
+  if printf '%s\n' "$1" > "$tmp" && touch -r "$MARKER" "$tmp"; then mv -f "$tmp" "$MARKER"; else rm -f "$tmp"; fi
 }
 
 # Change time, not modification time: a payload can reset mtime after an overwrite.
@@ -929,15 +939,21 @@ if [[ -n "$T2" ]]; then
   for _t in "${TARGET_DIRS[@]}"; do
     _use_root "$_t"
     [[ -d "$NODE_MODULES" ]] || continue
-    T2_FILES=()
+    T2_FILES=() _lock=""
     if [[ "$T2" == changed ]] && ! deps_changed; then
       [[ "${WORMHOOK_T2_FILES:-}" == 1 ]] || { T2_CACHED=1; continue; }
       _stamp || { T2_CACHED=1; continue; }
       if _changed_files && [[ "${#T2_FILES[@]}" -eq 0 ]]; then
         mv -f "$_pend" "$MARKER.seen"; T2_CACHED=1; continue
       fi
+    # A lockfile that changed without an install leaves the tree as scanned: check changed files.
+    elif [[ "$T2" == changed && -n "$LOCK_KEY" ]] && find "$MARKER.seen" -newercm "$MARKER.seen" &>/dev/null && _stamp && _changed_files; then
+      _lock="$LOCK_KEY"
+      if [[ "${#T2_FILES[@]}" -eq 0 ]]; then
+        _rekey "$_lock"; mv -f "$_pend" "$MARKER.seen"; T2_CACHED=1; continue
+      fi
     else
-      _stamp
+      [[ -f "${_pend:-}" ]] || _stamp
     fi
     T2_SCANNED=1; T2_PARTIAL="${#T2_FILES[@]}"
     # Warnings raised outside the dependency scan say nothing about this tree.
@@ -946,6 +962,7 @@ if [[ -n "$T2" ]]; then
     [[ -z "$ALERTS" && "$WARNINGS" == "$_w0" ]] || { rm -f "$_pend"; continue; }
     if [[ "$T2_PARTIAL" -gt 0 ]]; then
       mv -f "$_pend" "$MARKER.seen" 2>/dev/null
+      [[ -z "$_lock" ]] || _rekey "$_lock"
     elif cache_key=$(_scan_key); then
       mkdir -p "$CACHE_DIR" && printf '%s\n' "$cache_key" > "$MARKER" && mv -f "$_pend" "$MARKER.seen" 2>/dev/null
     else

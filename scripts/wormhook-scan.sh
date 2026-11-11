@@ -40,12 +40,9 @@ _scan_one() {  # $1=dir  $2=fast|deep
     jq -nc --arg d "$1" '{verdict:"yellow",systemMessage:("🟡 [wormhook-scan] cannot scan directory: " + $d)}'
     return "$EXIT_DEGRADED"
   }
-  if [[ "$mode" == deep ]]; then
-    payload=$(jq -nc --arg c "$dir" '{cwd:$c,hook_event_name:"PostToolUse",tool_input:{command:"npm install"}}')
-  else
-    payload=$(jq -nc --arg c "$dir" '{cwd:$c,hook_event_name:"SessionStart"}')
-  fi
-  printf '%s' "$payload" | bash "$ENGINE" 2>/dev/null
+  local deep=""; [[ "$mode" == deep ]] && deep=1
+  payload=$(jq -nc --arg c "$dir" '{cwd:$c,hook_event_name:"SessionStart"}')
+  printf '%s' "$payload" | WORMHOOK_DEEP="$deep" bash "$ENGINE" 2>/dev/null
 }
 _glyph() {  # stdin: engine JSON -> 🟢/🟡/🚨
   local g
@@ -405,12 +402,23 @@ command -v wormhook-scan >/dev/null 2>&1 && wormhook-scan git-hook "$(basename "
 BLOCK
   printf '%s\n' "$WORMHOOK_HOOK_MARKER_END"
 }
+# Git runs hooks from core.hooksPath alone, so a global path hides every repository's own hooks.
+_chain_block() {
+  printf '%s\n' "$WORMHOOK_CHAIN_MARKER"
+  cat <<'BLOCK'
+_wh_local="$(git rev-parse --git-common-dir 2>/dev/null)/hooks/$(basename "$0")"
+if [ -x "$_wh_local" ]; then exec "$_wh_local" "$@"; fi
+BLOCK
+  printf '%s\n' "$WORMHOOK_CHAIN_MARKER_END"
+}
+_own_hookdir() { printf '%s' "${XDG_CONFIG_HOME:-$HOME/.config}/wormhook/git-hooks"; }
 cmd_install_git_hook() {
+  local own; own="$(_own_hookdir)"
   local hookdir; hookdir="$(git config --global --get core.hooksPath 2>/dev/null || true)"
   if [[ -z "$hookdir" ]]; then
-    hookdir="${XDG_CONFIG_HOME:-$HOME/.config}/wormhook/git-hooks"
+    hookdir="$own"
     git config --global core.hooksPath "$hookdir"
-    echo "note: set global core.hooksPath=$hookdir (now applies to ALL your repos)"
+    echo "note: set global core.hooksPath=$hookdir (now applies to ALL your repos; their own hooks still run)"
   fi
   hookdir="${hookdir/#\~/$HOME}"
   mkdir -p "$hookdir"
@@ -427,24 +435,41 @@ cmd_install_git_hook() {
       chmod +x "$f"; echo "appended wormhook block: $f"
     fi
   done
+  # A hooks path the user already owned keeps its own semantics.
+  [[ "$hookdir" == "$own" ]] || return 0
+  for h in $WORMHOOK_CHAIN_HOOKS; do
+    f="$hookdir/$h"
+    if [[ ! -f "$f" ]]; then
+      { printf '#!/usr/bin/env bash\n'; _chain_block; } > "$f"
+    elif ! grep -qF "$WORMHOOK_CHAIN_MARKER" "$f"; then
+      { printf '\n'; _chain_block; } >> "$f"
+    fi
+    chmod +x "$f"
+  done
+  echo "chained: each repository's own .git/hooks still run"
 }
 cmd_uninstall_git_hook() {
   local hookdir; hookdir="$(git config --global --get core.hooksPath 2>/dev/null || true)"
   [[ -z "$hookdir" ]] && { echo "no global core.hooksPath set"; return 0; }
   hookdir="${hookdir/#\~/$HOME}"
   local h f tmp
-  for h in post-merge post-checkout post-rewrite; do
+  for h in $WORMHOOK_CHAIN_HOOKS; do
     f="$hookdir/$h"
-    { [[ -f "$f" ]] && grep -qF "$WORMHOOK_HOOK_MARKER" "$f"; } || continue
+    { [[ -f "$f" ]] && grep -qF -e "$WORMHOOK_HOOK_MARKER" -e "$WORMHOOK_CHAIN_MARKER" "$f"; } || continue
     tmp="$f.wh.$$"
     awk -v o="$WORMHOOK_HOOK_MARKER" -v c="$WORMHOOK_HOOK_MARKER_END" \
-      '$0==o{s=1} !s{print} $0==c{s=0}' "$f" > "$tmp"
+      -v o2="$WORMHOOK_CHAIN_MARKER" -v c2="$WORMHOOK_CHAIN_MARKER_END" \
+      '$0==o||$0==o2{s=1} !s{print} $0==c||$0==c2{s=0}' "$f" > "$tmp"
     if ! grep -qvE '^[[:space:]]*$|^#!' "$tmp"; then
       command rm -f "$f" "$tmp"; echo "removed (was wormhook-only): $f"
     else
       mv "$tmp" "$f"; chmod +x "$f"; echo "unwired: $f"
     fi
   done
+  # Unset only the path this installer set, and only once nothing else lives there.
+  if [[ "$hookdir" == "$(_own_hookdir)" ]] && rmdir "$hookdir" 2>/dev/null; then
+    git config --global --unset core.hooksPath && echo "unset global core.hooksPath"
+  fi
 }
 
 cmd_status() {

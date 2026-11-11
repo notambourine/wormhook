@@ -2,7 +2,7 @@
 
 Keep detection local, blocks precise, and incomplete coverage visible.
 
-- Keep detection and signatures in `scripts/`, event wiring in `hooks/`, and adapters free of detection logic. Preserve one registered object per event and hook filters broad enough to reach every engine command class.
+- Keep detection and signatures in `scripts/`, event wiring in `hooks/`, and adapters free of detection logic. Preserve one registered object per event. Leave Bash hooks unfiltered; the engine gates commands.
 - Preserve compound commands, environment prefixes, directory options, target directories, and workspace lifecycle checks. Never run an interpreter to discover startup files that it could execute.
 - Never cache persistence or source scans, time out source scans, or cache incomplete results. Invalidate dependency caches when the engine or corpus changes. Report missing signatures and scan failures; fail open in interactive hooks.
 - Limit hard blocks to PreToolUse and UserPromptSubmit. Preserve their distinct decision schemas and keep clean prompts silent. Pass untrusted values through `jq --arg`.

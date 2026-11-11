@@ -32,10 +32,14 @@ if [[ -f "$PWD/.env" ]] && \
 fi
 
 (( ${#audit[@]} == 0 )) && exit 0
+if wh_silenced "${WORMHOOK_SKIP_EXPOSURE:-}"; then
+  wh_flag ⚪ exposure "${#audit[@]} long-lived secret class(es) in worm-targeted paths (silenced)"
+  exit 0
+fi
 
 msg="🟡 [wormhook] exposure — ${#audit[@]} long-lived secret class(es) in worm-targeted paths (what gets exfiltrated if detection misses):"
 for _l in "${audit[@]}"; do msg+=$'\n  • '"$_l"; done
-msg+=$'\n  ↳ shrink the blast radius: passphrase-protect keys, prefer short-lived/fine-grained tokens, keep secrets in a manager not plaintext .env. [advisory only]'
+msg+=$'\n  ↳ shrink the blast radius: passphrase-protect keys, prefer short-lived/fine-grained tokens, keep secrets in a manager not plaintext .env. [advisory only; silence: WORMHOOK_SKIP_EXPOSURE=1]'
 ctx="[exposure-audit] Advisory only — NEVER blocks. ${#audit[@]} class(es) of long-lived secret sit in paths supply-chain worms harvest. Surface to the user only when relevant (working with keys/tokens/secrets); suggest shrinking the blast radius."
 wh_emit_ctx "$msg" "$ctx"
 exit 0

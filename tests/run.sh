@@ -1024,6 +1024,7 @@ OUT="$(_run_engine "$(_payload UserPromptSubmit)")"
 assert_jq "warn: zero-width character in agent prose warns without blocking" "$OUT" \
   '.verdict=="yellow" and (has("decision")|not) and (.systemMessage|contains("zero-width"))'
 
+# shellcheck disable=SC2016  # the literal $( ) is the command under test
 for _cmd in '(cd sub && npm install)' 'time npm  install' 'sudo -E npm ci' 'bash -c "npm install"' 'if true; then npm ci; fi' \
   'npm --silent install' 'pnpm --filter web install' 'pnpm dev' 'bun test' 'npm publish' 'corepack pnpm install' \
   './node_modules/.bin/vite' 'echo "$(npm install)"'; do

@@ -7,6 +7,8 @@ set -uo pipefail
 unset WORMHOOK_QUARANTINE WORMHOOK_T2_TTL_HOURS WORMHOOK_DOCTOR_QUIET WORMHOOK_SIGAGE_MAX_DAYS
 # shellcheck disable=SC2046  # word-splitting the name list is the point
 unset $(compgen -v WORMHOOK_SKIP_ 2>/dev/null) 2>/dev/null || true
+# A Socket Firewall on the runner must not switch dependency scans off under test.
+export WORMHOOK_DEPS=1
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENGINE="$REPO_ROOT/scripts/wormhook.sh"
@@ -730,7 +732,7 @@ shift
 exec "$@"
 SH
 chmod +x "$CASE_DIR/bin/timeout"
-OUT="$(printf '%s' "$(_payload PostToolUse 'npm install')" | HOME="$CASE_HOME" XDG_CACHE_HOME="$CASE_CACHE" \
+OUT="$(printf '%s' "$(_payload PostToolUse 'npm install && pip install -r requirements.txt')" | HOME="$CASE_HOME" XDG_CACHE_HOME="$CASE_CACHE" \
   PATH="$CASE_DIR/bin:$PATH" bash "$ENGINE" 2>/dev/null)"
 assert_jq "T0 Python: timed-out walks report degraded coverage" "$OUT" \
   '.verdict=="yellow" and (.systemMessage|contains(".pth scan") and contains("native-module scan"))'
@@ -1089,7 +1091,7 @@ _fp 'status line pipes a download to jq' .claude/settings.json "{\"statusLine\":
 _mktemp_case
 mkdir -p "$CASE_CWD/.venv/lib/python3.12/site-packages"
 printf "import os, sys;%s('import pytest_cov.embed')\n" 'exec' > "$CASE_CWD/.venv/lib/python3.12/site-packages/pytest-cov.pth"
-OUT="$(_run_engine "$(_payload UserPromptSubmit)")"
+OUT="$(_run_engine "$(_payload PreToolUse 'python3 app.py')")"
 assert_jq "warn: generic .pth startup hook warns without blocking" "$OUT" \
   '.verdict=="yellow" and (has("decision")|not) and (.systemMessage|contains("Python startup hook"))'
 
@@ -1202,6 +1204,34 @@ _mktemp_case
 printf 'K=ghp_%s\n' 'abcdefghijklmnopqrstuvwxyz0123' > "$CASE_CWD/.env"
 OUT="$(cd "$CASE_CWD" && HOME="$CASE_HOME" WORMHOOK_SKIP_EXPOSURE=1 bash "$REPO_ROOT/scripts/doctor/exposure.sh" 2>/dev/null)"
 assert_jq "doctor exposure: an acknowledged finding shows as silenced" "$OUT" '.systemMessage|contains("⚪") and contains("silenced")'
+
+_mktemp_case
+mkdir -p "$CASE_HOME/.local/lib/python3.12/site-packages"
+printf '%s\n' "$MAL_PTH" > "$CASE_HOME/.local/lib/python3.12/site-packages/evil.pth"
+OUT="$(_run_engine "$(_payload PreToolUse 'npm test')")"
+assert_jq "scope: a JavaScript command skips the Python environment walk" "$OUT" '.verdict=="green"'
+OUT="$(_run_engine "$(_payload PreToolUse 'npm test && python3 app.py')")"
+assert_jq "scope: a compound command with Python still walks it" "$OUT" \
+  '.hookSpecificOutput.permissionDecision=="deny" and (.hookSpecificOutput.permissionDecisionReason|contains("MALICIOUS PYTHON .pth"))'
+OUT="$(_run_engine "$(_payload SessionStart)")"
+assert_jq "scope: session start still walks Python environments" "$OUT" '.verdict=="red"'
+
+_mktemp_case
+mkdir -p "$CASE_CWD/node_modules/lib" "$CASE_DIR/bin"
+printf 'module.exports=1;\n' > "$CASE_CWD/node_modules/lib/index.js"
+printf '#!/bin/sh\n' > "$CASE_DIR/bin/sfw"; chmod +x "$CASE_DIR/bin/sfw"
+OUT="$(printf '%s' "$(_payload PostToolUse 'npm install')" | env -u WORMHOOK_DEPS HOME="$CASE_HOME" \
+  XDG_CACHE_HOME="$CASE_CACHE" PATH="$CASE_DIR/bin:$PATH" bash "$ENGINE" 2>/dev/null)"
+assert_jq "sfw: hooks leave dependencies to the firewall and say so" "$OUT" \
+  '.verdict=="green" and (.systemMessage|contains("dependencies left to sfw")) and (.systemMessage|contains("node_modules")|not)'
+OUT="$(printf '%s' "$(_payload PostToolUse 'npm install')" | HOME="$CASE_HOME" \
+  XDG_CACHE_HOME="$CASE_CACHE" PATH="$CASE_DIR/bin:$PATH" bash "$ENGINE" 2>/dev/null)"
+assert_jq "sfw: WORMHOOK_DEPS=1 keeps the dependency scan" "$OUT" \
+  '.verdict=="green" and (.systemMessage|contains("+ node_modules"))'
+OUT="$(env -u WORMHOOK_DEPS HOME="$CASE_HOME" XDG_CACHE_HOME="$CASE_CACHE" PATH="$CASE_DIR/bin:$PATH" \
+  bash "$SCAN_CLI" check "$CASE_CWD" --deep 2>&1)"
+[[ "$OUT" != *"left to sfw"* ]] && _ok "sfw: an explicit CLI dependency scan still runs" ||
+  _bad "sfw: an explicit CLI dependency scan still runs" "$OUT"
 echo
 printf 'tests: %d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

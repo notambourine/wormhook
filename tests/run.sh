@@ -1230,8 +1230,11 @@ assert_jq "sfw: WORMHOOK_DEPS=1 keeps the dependency scan" "$OUT" \
   '.verdict=="green" and (.systemMessage|contains("+ node_modules"))'
 OUT="$(env -u WORMHOOK_DEPS HOME="$CASE_HOME" XDG_CACHE_HOME="$CASE_CACHE" PATH="$CASE_DIR/bin:$PATH" \
   bash "$SCAN_CLI" check "$CASE_CWD" --deep 2>&1)"
-[[ "$OUT" != *"left to sfw"* ]] && _ok "sfw: an explicit CLI dependency scan still runs" ||
+if [[ "$OUT" != *"left to sfw"* ]]; then
+  _ok "sfw: an explicit CLI dependency scan still runs"
+else
   _bad "sfw: an explicit CLI dependency scan still runs" "$OUT"
+fi
 echo
 printf 'tests: %d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

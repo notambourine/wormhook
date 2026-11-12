@@ -43,7 +43,7 @@ _scan_one() {  # $1=dir  $2=fast|deep|nodeps
   local deep="" nodeps=""
   case "$mode" in deep) deep=1 ;; nodeps) nodeps=1 ;; esac
   payload=$(jq -nc --arg c "$dir" '{cwd:$c,hook_event_name:"SessionStart"}')
-  printf '%s' "$payload" | WORMHOOK_DEEP="$deep" WORMHOOK_NO_DEPS="$nodeps" bash "$ENGINE" 2>/dev/null
+  printf '%s' "$payload" | WORMHOOK_DEEP="$deep" WORMHOOK_NO_DEPS="$nodeps" WORMHOOK_DEPS=1 bash "$ENGINE" 2>/dev/null
 }
 _glyph() {  # stdin: engine JSON -> 🟢/🟡/🚨
   local g

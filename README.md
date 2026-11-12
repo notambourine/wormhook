@@ -12,10 +12,12 @@ Requires Bash and `jq`. Install `timeout` (GNU coreutils on macOS) to bound scan
 | Trigger | Coverage | Finding |
 | --- | --- | --- |
 | Guarded JavaScript package-manager/runtime commands | Persistence and source; dependencies when stale, except before installs | Deny |
-| Python, pip, pipx, and uv commands | Persistence and source | Deny |
+| Python, pip, pipx, and uv commands | Persistence, source, and Python environments | Deny |
 | Each human prompt | Persistence and source | Block the turn |
-| After installs or supported git updates | Persistence and source; JavaScript dependencies after installs or when stale | Warn |
-| Session start | Persistence and source; dependencies when stale; health checks | Warn |
+| After installs or supported git updates | Persistence and source; JavaScript dependencies after installs or when stale; Python environments after Python installs | Warn |
+| Session start | Persistence, source, and Python environments; dependencies when stale; health checks | Warn |
+
+With Socket Firewall (`sfw`) on `PATH`, hooks leave JavaScript dependencies to it and say so in the verdict; `WORMHOOK_DEPS=1` keeps the hook scans, and `wormhook-scan --deps` or `--deep` always scans. Python environment walks run only where the table lists them; a `.pth` or native module in the project root is checked on every scan.
 
 Clean prompts stay silent. Other clean scans show 🟢. Matches show 🚨. Ambiguous patterns and incomplete coverage show 🟡 and leave interactive commands unblocked. A prompt scan that outlives the hook timeout is killed silently; the next prompt or session start reports it, after that turn has run unscanned. See `scripts/` for command gates, detection, and advisory sources.
 

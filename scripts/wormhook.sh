@@ -193,7 +193,8 @@ _changed_files() {  # fills T2_FILES; 1 => walk failed, too many files, or an un
 
 MODE=session_start
 # T2: empty skips dependencies, "changed" honors the cache, "always" rescans.
-RUN_T1=0 T2=""
+# RUN_PY walks Python environments: only an interpreter start loads what they hold.
+RUN_T1=0 T2="" RUN_PY=0
 case "$EVENT" in
   PreToolUse)
     MODE=pre_tool
@@ -201,11 +202,9 @@ case "$EVENT" in
       RUN_T1=1
       # An install has not written its dependencies yet; PostToolUse scans the result.
       _cmd_class "$INSTALL_RE" || T2=changed
-    elif _cmd_class "$PYGATE_RE"; then
-      RUN_T1=1
-    else
-      exit 0
     fi
+    _cmd_class "$PYGATE_RE" && RUN_T1=1 RUN_PY=1
+    [[ "$RUN_T1" == 1 ]] || exit 0
     ;;
   PostToolUse)
     MODE=post_tool
@@ -213,21 +212,24 @@ case "$EVENT" in
       RUN_T1=1; T2=always
     elif _cmd_class "$GIT_RE"; then
       RUN_T1=1; T2=changed
-    elif _cmd_class "$PYINSTALL_RE"; then
-      RUN_T1=1
-    else
-      exit 0
     fi
+    _cmd_class "$PYINSTALL_RE" && RUN_T1=1 RUN_PY=1
+    [[ "$RUN_T1" == 1 ]] || exit 0
     ;;
   UserPromptSubmit)
     MODE=prompt_submit; RUN_T1=1
     ;;
   *)
-    MODE=session_start; RUN_T1=1; T2=changed
+    MODE=session_start; RUN_T1=1; T2=changed; RUN_PY=1
     [[ "${WORMHOOK_DEEP:-}" == 1 ]] && T2=always
     [[ "${WORMHOOK_NO_DEPS:-}" == 1 ]] && T2=""
     ;;
 esac
+# Socket Firewall vets packages as they install; rescanning them costs a tree walk per command.
+WH_SFW=0
+if [[ -n "$T2" && "${WORMHOOK_DEPS:-}" != 1 ]] && command -v sfw &>/dev/null; then
+  T2="" WH_SFW=1
+fi
 
 # Use permissionDecision: exit 2 sends the reason only to the model.
 ALERTS="" SUMMARY=""
@@ -571,27 +573,29 @@ done
 
 # Do not run Python to discover roots: that would execute the startup hooks being scanned.
 py_roots=()
-for _t in "${TARGET_DIRS[@]}"; do
-  for _u in "$_t/.venv" "$_t/venv" "$_t/env" "$_t/.tox"; do
+if [[ "$RUN_PY" == 1 ]]; then
+  for _t in "${TARGET_DIRS[@]}"; do
+    for _u in "$_t/.venv" "$_t/venv" "$_t/env" "$_t/.tox"; do
+      [[ -d "$_u" ]] && py_roots+=("$_u")
+    done
+  done
+  case "${VIRTUAL_ENV:-}" in
+    ""|"${CWD}/.venv"|"${CWD}/venv"|"${CWD}/env"|"${CWD}/.tox") : ;;
+    *) [[ -d "$VIRTUAL_ENV" ]] && py_roots+=("$VIRTUAL_ENV") ;;
+  esac
+  [[ -n "${CONDA_PREFIX:-}" && -d "${CONDA_PREFIX:-}" ]] && py_roots+=("$CONDA_PREFIX")
+  # Exclude /usr/lib: it is managed by the OS package manager.
+  for _u in "$HOME"/.local/lib/python*/site-packages \
+            "$HOME"/Library/Python/*/lib/python/site-packages \
+            /opt/homebrew/lib/python*/site-packages \
+            /usr/local/lib/python*/site-packages \
+            /usr/local/lib/python*/dist-packages \
+            /Library/Frameworks/Python.framework/Versions/*/lib/python*/site-packages \
+            "$HOME"/.pyenv/versions/*/lib/python*/site-packages \
+            "$HOME"/.local/share/uv/python/*/lib/python*/site-packages; do
     [[ -d "$_u" ]] && py_roots+=("$_u")
   done
-done
-case "${VIRTUAL_ENV:-}" in
-  ""|"${CWD}/.venv"|"${CWD}/venv"|"${CWD}/env"|"${CWD}/.tox") : ;;
-  *) [[ -d "$VIRTUAL_ENV" ]] && py_roots+=("$VIRTUAL_ENV") ;;
-esac
-[[ -n "${CONDA_PREFIX:-}" && -d "${CONDA_PREFIX:-}" ]] && py_roots+=("$CONDA_PREFIX")
-# Exclude /usr/lib: it is managed by the OS package manager.
-for _u in "$HOME"/.local/lib/python*/site-packages \
-          "$HOME"/Library/Python/*/lib/python/site-packages \
-          /opt/homebrew/lib/python*/site-packages \
-          /usr/local/lib/python*/site-packages \
-          /usr/local/lib/python*/dist-packages \
-          /Library/Frameworks/Python.framework/Versions/*/lib/python*/site-packages \
-          "$HOME"/.pyenv/versions/*/lib/python*/site-packages \
-          "$HOME"/.local/share/uv/python/*/lib/python*/site-packages; do
-  [[ -d "$_u" ]] && py_roots+=("$_u")
-done
+fi
 pth_files=()
 if [[ ${#py_roots[@]} -gt 0 ]]; then
   py_paths=$(_wh_run 5 find "${py_roots[@]}" -maxdepth 5 -name '*.pth' -type f 2>/dev/null) ||
@@ -998,6 +1002,8 @@ if [[ -z "$ALERTS" ]]; then
     SCOPE+=" + node_modules"
   elif [[ "$T2_CACHED" == 1 ]]; then
     SCOPE+=" + node_modules (cached, deps unchanged)"
+  elif [[ "$WH_SFW" == 1 ]]; then
+    SCOPE+="; dependencies left to sfw"
   fi
   # An absent start time must not become zero, which would report the whole Unix epoch.
   DUR=""

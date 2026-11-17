@@ -8,6 +8,8 @@ updates:
       timezone: America/Chicago
     cooldown:
       default-days: 3
+      exclude:
+        - notambourine/*
     groups:
       actions:
         patterns:

@@ -39,7 +39,10 @@ jobs:
           # command would abort before the allowlist below ever reads its output.
           rc=0; out=$(claude plugin validate . --strict 2>&1) || rc=$?
           printf '%s\n' "$out"
-          findings=$(printf '%s\n' "$out" | grep '❯' | grep -vF 'AGENTS.md at the plugin root' || true)
+          # The Provides inventory and About notes share the findings' ❯ bullet.
+          findings=$(printf '%s\n' "$out" \
+            | awk '/^(Provides|About these checks):/{s=1;next} /^[^ ]/{s=0} !s && /❯/' \
+            | grep -vF 'AGENTS.md at the plugin root' || true)
           if [ -n "$findings" ]; then
             echo "::error::unexpected validate findings (see above)"; exit 1
           fi
